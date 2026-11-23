@@ -1,6 +1,6 @@
 # ShelfScan AMR: concept note
 
-Uncertainty-aware autonomous shelf auditing with active visual verification. TIH IIT Bombay Physical AI Hackathon. [Team name / members - add before submitting]. Code: [GITHUB LINK - add before submitting]. Video: [VIDEO LINK - add before submitting].
+Uncertainty-aware autonomous shelf auditing with active visual verification. TIH IIT Bombay Physical AI Hackathon. VOLTIC D. NERDS, Chennai Institute of Technology (CIT) — Iffat Irfana M, Arunachalam R, Aravind K. Code: https://github.com/iffatirfana/shelfscan-amr. Video: [VIDEO LINK - add before submitting].
 
 ## 1. Problem
 

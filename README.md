@@ -7,6 +7,9 @@ Each shelf slot ends in one of four states: **OK, MISPLACED, EMPTY, UNVERIFIED**
 "Nothing detected" is never reported as EMPTY. Unresolved slots are re-observed
 from a better viewpoint (active verification).
 
+Team: VOLTIC D. NERDS, Chennai Institute of Technology (CIT) — Iffat Irfana M, Arunachalam R, Aravind K
+
+- Code: https://github.com/iffatirfana/shelfscan-amr
 - Demo video: [VIDEO LINK - add before submitting]
 - Slides + concept note (one PDF): `docs/ShelfScan_submission.pdf` (editable deck: `docs/ShelfScan_deck.pptx`)
 - Video voice-over script: `docs/video_script.md`

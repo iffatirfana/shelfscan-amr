@@ -21,8 +21,8 @@ DOCS = ROOT / "docs"
 IMG = DOCS / "img"
 
 VIDEO_URL = "[VIDEO LINK - add before submitting]"
-GITHUB_URL = "[GITHUB LINK - add before submitting]"
-TEAM = "[Team name / members - add before submitting]"
+GITHUB_URL = "https://github.com/iffatirfana/shelfscan-amr"
+TEAM = "VOLTIC D. NERDS, Chennai Institute of Technology (CIT) — Iffat Irfana M, Arunachalam R, Aravind K"
 
 POL = ["V1_fixed", "V3_rescan", "V4_active"]
 NAME = {"V1_fixed": "Fixed patrol", "V3_rescan": "Same-position rescan",
