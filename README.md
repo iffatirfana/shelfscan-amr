@@ -1,11 +1,69 @@
 # ShelfScan AMR
 
 Uncertainty-aware autonomous inventory-auditing robot with active visual
-verification and a self-updating digital twin. Simulated in Webots.
+verification and a self-updating digital twin. Simulated in **Webots R2025a**.
 
 Each shelf slot ends in one of four states: **OK, MISPLACED, EMPTY, UNVERIFIED**.
 "Nothing detected" is never reported as EMPTY. Unresolved slots are re-observed
 from a better viewpoint (active verification).
+
+- Demo video: [VIDEO LINK - add before submitting]
+- Slides + concept note (one PDF): `docs/ShelfScan_submission.pdf` (editable deck: `docs/ShelfScan_deck.pptx`)
+- Video voice-over script: `docs/video_script.md`
+
+## Results (real Webots runs)
+
+<!-- RESULTS:START -->
+<!-- RESULTS:END -->
+
+Definitions (computed per run in `webots/controllers/shelfscan_audit/shelfscan_audit.py`):
+
+- **Slot accuracy**: final slot status equals ground truth; UNVERIFIED counts as wrong.
+- **UNVERIFIED rate**: slots left UNVERIFIED / all slots.
+- **False-EMPTY rate**: slots reported EMPTY that were not empty / all non-empty slots.
+- **Audit time**: simulated seconds from start of the audit to the final report.
+
+Every number above comes from `results/results.csv`, which is written only by the
+audit controller running inside Webots on seeds never used for training.
+`experiments/policy_harness.py` is an abstract logic check; its output is not a result.
+
+## Strategies compared
+
+| Name | What it does |
+|---|---|
+| `V1_fixed` | Fixed patrol: one look per slot from the centre viewpoint. |
+| `V3_rescan` | Fixed patrol, then one more look from the SAME viewpoint for each UNVERIFIED slot. |
+| `V4_active` | Fixed patrol, then up to 3 extra looks per UNVERIFIED slot from a NEW viewpoint chosen from the evidence (opposite side of the blocker, else closer). |
+
+All three use the same detector, thresholds (confidence >= 0.60, visibility >= 0.70) and digital twin.
+
+## How to run
+
+Requirements: Windows/Linux, Webots R2025a, Python 3.10+ (3.12 used here) on PATH.
+
+```bash
+pip install -r requirements.txt
+python -m unittest discover -s tests          # 28 unit tests
+
+# One world, one run (camera needs rendering, so no --no-rendering):
+python webots/tools/make_world.py --seed 1 --out webots/worlds --controller shelfscan_audit --version R2025a
+python webots/tools/run_webots.py webots/worlds/warehouse.wbt --timeout 900 --env SHELFSCAN_POLICY=V4_active
+#   -> results/<policy>_seed1.json and _slots.csv, controller log in logs/
+
+# Full pipeline used for the reported numbers
+python experiments/run_batch.py capture --seeds 1-12 --jobs 6          # training frames -> dataset/
+python webots/tools/overlay_check.py dataset/images/train dataset/labels/train overlay 20   # look at the boxes
+python train/train_yolo.py --data dataset --epochs 15 --imgsz 320 --device cpu
+cp runs/shelfscan/weights/best.pt models/shelfscan_yolov8n.pt
+python experiments/run_batch.py eval --seeds 101-130 --jobs 6          # 3 strategies per seed -> results/runs/
+python experiments/aggregate_results.py results/runs results           # results.csv + summary.md
+python docs/build_submission.py                                        # deck, concept note, PDF
+```
+
+`run_webots.py` finds Webots via `WEBOTS_HOME` (default `C:\Program Files\Webots`).
+Webots on Windows does not forward controller output to the terminal, so each
+controller logs to `logs/<controller>_<tag>.log` and quits the simulation on any
+exception, so batch runs never hang.
 
 ## Layout
 
@@ -16,56 +74,40 @@ shelfscan/            core logic (no Webots dependency)
   viewpoint.py        next-best-view rule for unresolved slots
   policies.py         V1 fixed patrol / V3 re-scan / V4 active verification
   geometry.py         camera projection, slot visibility and blocker side
-  robot_utils.py      Webots helpers (go-to-pose driver, class list)
-webots/tools/make_world.py          randomised world + layout.json
+  robot_utils.py      Webots helpers (go-to-pose driver with aisle routing, logging)
+webots/tools/make_world.py          randomised world (.wbt, base nodes only) + layout.json
+webots/tools/run_webots.py          launch Webots with timeout
 webots/tools/overlay_check.py       draw labels on images to verify them
-webots/controllers/data_capture/    builds the YOLO dataset
-webots/controllers/shelfscan_audit/ runs one policy with the trained detector
-train/train_yolo.py   YOLOv8n fine-tune (+ optional INT8 export)
+webots/controllers/data_capture/    builds the YOLO dataset (labels from projected 3D geometry)
+webots/controllers/shelfscan_audit/ runs one strategy with the trained detector and scores it
+webots/controllers/snapshot/        renders overview images for the docs
+train/train_yolo.py                 YOLOv8n fine-tune (+ optional INT8 export)
+models/                             trained detector used for the results + its training log
+experiments/run_batch.py            parallel Webots runs (capture / eval)
+experiments/aggregate_results.py    results/runs/*.json -> results/results.csv + summary.md
 experiments/policy_harness.py       abstract logic check (NOT a Webots result)
-experiments/aggregate_results.py    results/*.json -> comparison table
-tests/                unit tests (python -m unittest discover -s tests)
+docs/                               deck, concept note, video script, figures
+tests/                              unit tests
 ```
 
-## Status
+## What had to be fixed to make it run (first Webots contact)
 
-| Part | State |
-|---|---|
-| Core logic, geometry, policies | Unit tested (22 tests pass) |
-| `policy_harness.py` | Runs; numbers depend on stated assumptions, not evidence |
-| `make_world.py`, controllers | Written without Webots available; **not yet run** |
+- The `webots://` PROTOs (TurtleBot3Burger, Floor, TexturedBackgroundLight) never
+  downloaded on the test machine, so the world had no robot. The world now uses
+  only base nodes: a differential-drive robot with TurtleBot3-Burger wheel
+  geometry and the same device names, a plain floor, lights and background.
+- The camera at 0.12 m could not see the 0.30 m items on a 0.32 m shelf; it now sits
+  on a mast at item height (0.47 m).
+- The robot would have driven through the next shelf row when changing aisles;
+  the driver now routes via the aisle end.
+- Webots Recognition boxes were loose; training labels are now projected from the
+  known 3D geometry of the current row (checked with `overlay_check.py`).
+- Side viewpoints kept the camera facing straight ahead, so the slot sat at the
+  image edge; they now turn to look at the slot. The dataset was recaptured and
+  the detector retrained after this fix.
 
-## Run order (Webots R2023b or newer, Python 3 controller)
+## Limits
 
-```bash
-pip install -r requirements.txt
-python -m unittest discover -s tests            # sanity check
-
-# 1. Data: several seeds, data_capture controller
-for s in 1 2 3 4 5 6; do
-  python webots/tools/make_world.py --seed $s --out webots/worlds --controller data_capture
-  SHELFSCAN_SEED=$s webots --batch --mode=fast webots/worlds/warehouse.wbt
-done
-python webots/tools/overlay_check.py dataset/images/train dataset/labels/train overlay 20
-#   look at overlay/: boxes must sit on the items. If not, fix geometry.py first.
-
-# 2. Train
-python train/train_yolo.py --data dataset --epochs 60
-
-# 3. Evaluate on UNSEEN seeds (e.g. 101..120), each policy
-for s in $(seq 101 120); do
-  python webots/tools/make_world.py --seed $s --out webots/worlds --controller shelfscan_audit
-  for p in V1_fixed V3_rescan V4_active; do
-    SHELFSCAN_POLICY=$p webots --batch --mode=fast webots/worlds/warehouse.wbt
-  done
-done
-python experiments/aggregate_results.py results/
-```
-
-## Things to check on first run
-- Camera frame convention (x forward, y left, z up) assumed in `geometry.py`.
-- `TurtleBot3Burger` device names and wheel constants in `robot_utils.py`.
-- `#VRML_SIM` version: pass `--version` to `make_world.py` to match your Webots.
-- The slot thresholds in `reasoning.py` (`MIN_CONF`, `MIN_VISIBILITY`) should be
-  set from validation data before the final runs.
-- Report only numbers from step 3. Never report `policy_harness.py` output.
+Simplified scene (coloured boxes as SKUs, one shelf level, static world, GPS pose),
+thresholds are design defaults (not tuned on validation data), few truly empty
+slots per seed, no real-robot test yet.

@@ -60,7 +60,33 @@ class Driver:
             self.distance += math.hypot(x - self._last[0], y - self._last[1])
         self._last = (x, y)
 
+    AISLE_X = -0.8          # x of the free aisle at the end of the shelf rows
+
     def go_to(self, x, y, yaw, tol=0.04, yaw_tol=0.04, timeout_s=60.0):
+        """Drive to (x, y) then turn to yaw. If the target is in another aisle
+        (|dy| > 1 m), route via the aisle end so the robot never crosses a row."""
+        px, py, _ = self.pose()
+        if abs(y - py) > 1.0:
+            self._go_point(self.AISLE_X, py, tol=0.10, timeout_s=timeout_s)
+            self._go_point(self.AISLE_X, y, tol=0.10, timeout_s=timeout_s)
+        return self._go_pose(x, y, yaw, tol, yaw_tol, timeout_s)
+
+    def _go_point(self, x, y, tol, timeout_s):
+        t_end = self.robot.getTime() + timeout_s
+        while self.robot.getTime() < t_end:
+            px, py, pyaw = self.pose()
+            dx, dy = x - px, y - py
+            dist = math.hypot(dx, dy)
+            if dist <= tol:
+                break
+            err = wrap(math.atan2(dy, dx) - pyaw)
+            if abs(err) > 0.25:
+                self._drive(0.0, 1.8 * err)
+            else:
+                self._drive(min(0.18, 0.8 * dist), 2.5 * err)
+            self._tick()
+
+    def _go_pose(self, x, y, yaw, tol, yaw_tol, timeout_s):
         t_end = self.robot.getTime() + timeout_s
         while self.robot.getTime() < t_end:
             px, py, pyaw = self.pose()
@@ -82,3 +108,50 @@ class Driver:
         for _ in range(3):
             self._tick()          # settle
         return True
+
+
+def run_logged(main, name):
+    """Run a controller main() with stdout/stderr teed to logs/<name>.log.
+
+    On Windows, Webots does not forward controller output to the launching
+    terminal, so batch runs need a file log. On an exception the simulation is
+    quit with status 1 so unattended runs never hang."""
+    import sys
+    import traceback
+    log_dir = Path(__file__).resolve().parents[1] / "logs"
+    log_dir.mkdir(exist_ok=True)
+    tag = os.environ.get("SHELFSCAN_TAG")
+    f = open(log_dir / (f"{name}_{tag}.log" if tag else f"{name}.log"), "a", buffering=1)
+
+    class Tee:
+        def __init__(self, *s):
+            self.s = s
+
+        def write(self, x):
+            for s in self.s:
+                try:
+                    s.write(x)
+                except Exception:
+                    pass
+
+        def flush(self):
+            for s in self.s:
+                try:
+                    s.flush()
+                except Exception:
+                    pass
+
+    sys.stdout, sys.stderr = Tee(sys.__stdout__, f), Tee(sys.__stderr__, f)
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException:
+        traceback.print_exc()
+        try:
+            import controller
+            r = getattr(controller, "_shelfscan_robot", None) or controller.Supervisor()
+            r.simulationQuit(1)
+        except Exception:
+            pass
+        sys.exit(1)

@@ -14,8 +14,8 @@ from PIL import Image, ImageDraw
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from shelfscan.robot_utils import CLASSES  # noqa: E402
 
-COL = {"sku_A": "red", "sku_B": "lime", "sku_C": "cyan", "sku_D": "yellow",
-       "slot_empty": "magenta", "blocker": "white"}
+COL = {"sku_A": "cyan", "sku_B": "magenta", "sku_C": "orange", "sku_D": "black",
+       "slot_empty": "lime", "blocker": "white"}
 
 
 def main(img_dir, lbl_dir, out_dir, n=20):
@@ -30,7 +30,7 @@ def main(img_dir, lbl_dir, out_dir, n=20):
             c, cx, cy, w, h = line.split()
             c = CLASSES[int(c)]
             cx, cy, w, h = float(cx) * W, float(cy) * H, float(w) * W, float(h) * H
-            d.rectangle([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], outline=COL[c], width=2)
+            d.rectangle([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], outline=COL[c], width=4)
             d.text((cx - w / 2 + 2, cy - h / 2 + 2), c, fill=COL[c])
         im.save(out / p.name)
     print(f"wrote overlays to {out}")

@@ -16,7 +16,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="dataset")
     ap.add_argument("--epochs", type=int, default=60)
-    ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--imgsz", type=int, default=320)
+    ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--device", default=None, help="e.g. cpu or 0")
+    ap.add_argument("--weights", default="yolov8n.pt")
     ap.add_argument("--export", action="store_true", help="export TFLite INT8 after training")
     a = ap.parse_args()
 
@@ -26,8 +29,9 @@ def main():
     yaml.write_text(f"path: {root}\ntrain: images/train\nval: images/val\nnames:\n{names}\n")
 
     from ultralytics import YOLO
-    model = YOLO("yolov8n.pt")
-    model.train(data=str(yaml), epochs=a.epochs, imgsz=a.imgsz, project="runs",
+    model = YOLO(a.weights)
+    model.train(data=str(yaml), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device=a.device,
+                project=str(Path("runs").resolve()), plots=True,
                 name="shelfscan", exist_ok=True,
                 # colour/lighting augmentation reduces overfitting to the renderer
                 hsv_h=0.02, hsv_s=0.5, hsv_v=0.5, degrees=3, translate=0.08, scale=0.3,
