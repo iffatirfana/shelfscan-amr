@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+dataset/
+runs/
+overlay/
+logs/
+*.pt
+!models/*.pt
