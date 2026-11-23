@@ -1,9 +1,9 @@
 __pycache__/
 *.pyc
-dataset/
-runs/
-overlay/
-logs/
+/dataset/
+/runs/
+/overlay/
+/logs/
 *.pt
 !models/*.pt
 webots/worlds/.*.wbproj
