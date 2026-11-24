@@ -1,6 +1,6 @@
 # ShelfScan AMR: 4-minute demo video voice-over
 
-About 633 words, roughly 4 minutes at ~140 words per minute. All numbers are from results_v2/results.csv (30 unseen seeds, real Webots runs).
+About 636 words, roughly 4 minutes at ~140 words per minute. All numbers are from results_v2/results.csv (30 unseen seeds, real Webots runs).
 
 Covers the four required points: (1) problem, (2) simulation, (3) outcome, (4) path to reality.
 
@@ -26,7 +26,7 @@ We ran three strategies on 30 warehouse layouts the detector had never seen, all
 
 *On screen:* Hardware slide; then limits slide; end on links slide.
 
-The reasoning, digital twin and viewpoint selection are plain Python with unit tests and no simulator dependency, so they move to a real robot unchanged. On hardware we would use a ROS 2 differential-drive base with LiDAR localisation on a shelf map instead of simulator GPS, an RGB camera on a mast at shelf height, and an edge computer running the detector, exported to INT8. After fine-tuning on real shelf photos, the first trial would be one aisle, checked against a manual count. We are honest about the limits: everything here is simulation. The cartons and their labels are rendered, the world is static, localisation is ideal, the robot is a scissor-lift look-alike on small running gear, the two decision thresholds are design defaults rather than tuned values, and nothing has run on a physical robot yet. What the simulation does show is the core idea: a robot that knows what it has not seen, and goes to look again. Thank you.
+The reasoning, digital twin and viewpoint selection are plain Python with unit tests and no simulator dependency, so they move to a real robot unchanged. On hardware we would use a ROS 2 differential-drive base with LiDAR localisation on a shelf map instead of simulator GPS, an RGB camera on a mast at shelf height, and an edge computer running the detector, exported to INT8. After fine-tuning on real shelf photos, the first trial would be one aisle, checked against a manual count. We are honest about the limits: everything here is simulation. The cartons and their labels are rendered, the world is static, localisation is ideal, the robot's scissor linkage really folds but rides on small TurtleBot3-class running gear, the two decision thresholds are design defaults rather than tuned values, and nothing has run on a physical robot yet. What the simulation does show is the core idea: a robot that knows what it has not seen, and goes to look again. Thank you.
 
 ## Recording checklist
 

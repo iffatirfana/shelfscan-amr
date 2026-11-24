@@ -145,7 +145,7 @@ def content(S, seeds, T):
                       "(opposite side of the blocker, or closer) and re-observes, up to 3 extra looks.",
                       "A digital twin keeps expected vs observed state per slot and exports an audit report (CSV)."]),
         dict(title="System architecture", kind="flow",
-             flow=[["Camera 640x480\non 0.47 m mast", "YOLOv8n detector\n6 classes", "Slot association\n(map + pose projection)",
+             flow=[["Camera 640x480\non a powered lift", "YOLOv8n detector\n6 classes", "Slot association\n(map + pose projection)",
                     "Slot reasoning\nconf + visibility gates"],
                    ["Digital twin\nexpected vs observed", "Policy\nV1 / V3 / V4", "Next-best-view\nselector",
                     "Go-to-pose driver\nGPS + IMU, diff-drive"]],
@@ -172,6 +172,11 @@ def content(S, seeds, T):
              bullets=["Scissor-lift AMR built from Webots base nodes: differential drive (TurtleBot3-Burger "
                       "wheel geometry), GPS + IMU for pose, and a 640x480 camera on a powered lift that "
                       "rises to each shelf level (0.56 / 1.21 / 1.86 m).",
+                      "The lift is a real scissor linkage: six crossed-bar stages in two stacks, pinned "
+                      "at every stage end and crossing, one sliding end on the chassis and one under the "
+                      "platform. Bar poses are solved from the commanded height each control step, so the "
+                      "stack folds flat (11 deg) at the bottom level and extends (70 deg) at the top. It "
+                      "is visual only - no physics joints - so it cannot affect the audit result.",
                       "Contents are plain cardboard cartons in five size classes. There is NO colour cue: the "
                       "SKU is carried only by a large black-and-white pattern on a white shipping label "
                       "(square / horizontal bars / dot grid / vertical bars). A blocker is an unlabelled "
@@ -211,7 +216,7 @@ def content(S, seeds, T):
                       "overruns the frame; filtering them cost 12x the blocker boxes. A truncated carton has "
                       "an ambiguous SKU, a truncated blocker does not, so the asymmetry is deliberate.",
                       "Limit: simulation only. Simplified scene (rendered cartons, flat printed labels, "
-                      "static world, perfect GPS pose) and a scissor-lift look-alike on small running gear; "
+                      "static world, perfect GPS pose) and a scissor linkage that really folds but rides on small TurtleBot3-class running gear; "
                       "nothing has run on a physical robot.",
                       "Limit: decision thresholds (0.60 conf / 0.70 visibility) are design defaults, not tuned "
                       "on validation data.",
@@ -373,7 +378,8 @@ def concept_note(S, seeds, T):
               "GPS), an RGB camera on a mast, and an edge computer running the INT8-exported YOLOv8n; fine-tune "
               "on real shelf images and pilot on one aisle against a manual count. Current limits: simplified "
               "scene (rendered cartons with flat printed labels, static world, ideal pose, and a "
-              "scissor-lift look-alike on small running gear), thresholds not yet tuned on "
+              "scissor linkage that really folds but rides on small TurtleBot3-class running gear), "
+              "thresholds not yet tuned on "
               "validation data, few truly empty slots in evaluation, and no hardware measurements yet."),
     ]
 
@@ -707,7 +713,7 @@ def video_script(S, seeds, T):
          "height, and an edge computer running the detector, exported to INT8. After fine-tuning on real shelf photos, "
          "the first trial would be one aisle, checked against a manual count. We are honest about the limits: "
          "everything here is simulation. The cartons and their labels are rendered, the world is static, "
-         "localisation is ideal, the robot is a scissor-lift look-alike on small running gear, the two decision "
+         "localisation is ideal, the robot's scissor linkage really folds but rides on small TurtleBot3-class running gear, the two decision "
          "thresholds are design defaults rather than tuned values, and nothing has run on a "
          "physical robot yet. What the simulation does show is the core idea: a robot that knows what it has not "
          "seen, and goes to look again. Thank you."),

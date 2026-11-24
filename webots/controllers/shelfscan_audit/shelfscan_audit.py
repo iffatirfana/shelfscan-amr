@@ -34,6 +34,7 @@ from shelfscan.geometry import project_box, visibility_and_side  # noqa: E402
 from shelfscan.policies import POLICIES                          # noqa: E402
 from shelfscan.robot_utils import (CLASSES, Driver, Lift,        # noqa: E402
                                    content_box, load_layout)
+from shelfscan.scissor import ScissorLinks                       # noqa: E402
 from shelfscan.twin import DigitalTwin                           # noqa: E402
 from shelfscan.types import Observation, Status                  # noqa: E402
 
@@ -66,7 +67,9 @@ def main():
     W, H, fov = cam.getWidth(), cam.getHeight(), cam.getFov()
     cam_node = robot.getFromDef("CAM")
     drv = Driver(robot, step)
-    lift = Lift(robot, step)
+    links = ScissorLinks(robot)
+    lift = Lift(robot, step, links=links)
+    drv.on_step = lift.tick          # the scissor folds while the base drives
     twin = DigitalTwin({sid: s["expected"] for sid, s in slots.items()})
     n_frames = 0
 
@@ -104,6 +107,7 @@ def main():
         drv.go_to(x, y, yaw)
         lift.settle(s["cam_z"])
         robot.step(step)
+        lift.tick()
         img = np.ascontiguousarray(np.frombuffer(cam.getImage(), np.uint8).reshape((H, W, 4))[:, :, :3])  # BGR
         det = model.predict(img, conf=CONF_MIN, imgsz=IMGSZ, verbose=False)[0]
         n_frames += 1

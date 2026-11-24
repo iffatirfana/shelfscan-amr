@@ -12,7 +12,8 @@ sys.path.insert(0, str(ROOT))
 
 from controller import Supervisor                      # noqa: E402
 
-from shelfscan.robot_utils import Driver, load_layout  # noqa: E402
+from shelfscan.robot_utils import Driver, Lift, load_layout  # noqa: E402
+from shelfscan.scissor import ScissorLinks             # noqa: E402
 
 
 def main():
@@ -27,11 +28,15 @@ def main():
     step = int(robot.getBasicTimeStep())
     cam = robot.getDevice("camera")
     cam.enable(step)
+    drv = Driver(robot, step)
+    links = ScissorLinks(robot)
+    hoist = Lift(robot, step, links=links)
+    drv.on_step = hoist.tick
     lift = robot.getDevice("lift")
     carriage = robot.getFromDef("LIFT")
-    drv = Driver(robot, step)
     print(f"devices ok: camera {cam.getWidth()}x{cam.getHeight()} "
-          f"fov={cam.getFov():.4f}  lift={lift is not None}", flush=True)
+          f"fov={cam.getFov():.4f}  lift={lift is not None} "
+          f"scissor_links={len(links)}", flush=True)
     print(f"layout: {layout['n_slots']} slots, {layout['n_sides']} sides, "
           f"{layout['n_levels']} levels, {layout['n_bays']} bays", flush=True)
 
@@ -40,6 +45,7 @@ def main():
         for _ in range(n):
             if robot.step(step) == -1:
                 raise SystemExit
+            hoist.tick()
         return carriage.getPosition()[2]
 
     # 1. the lift must really change the camera height
@@ -72,6 +78,7 @@ def main():
         x, y, yaw = s["viewpoints"]["center"]
         drv.go_to(x, y, yaw)
         robot.step(step)
+        hoist.tick()
         px, py, pyaw = drv.pose()
         f = out / f"{sid}_{s['size_class']}_{s['actual'] or 'empty'}.png"
         cam.saveImage(str(f), 95)

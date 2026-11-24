@@ -25,11 +25,19 @@ floor with a yellow lane line, steel-truss ceiling.
   shortcut. The detector has to work from shape and print.
 - **A blocker** is an *unlabelled* carton or a pallet stood at the bay mouth; an
   **empty slot** is a bare bay. Both are told apart by shape and texture, not colour.
-- **The robot is a scissor-lift AMR**: low grey chassis, yellow side panels, black
-  wheels, a yellow crossed-bar mast, and a grey top bar with white LED strips and
-  a camera unit at each end. The 640x480 camera rides a powered lift that really
-  raises it to each shelf level (0.56 / 1.21 / 1.86 m). Drive is differential
-  (TurtleBot3-Burger wheel geometry) with GPS + IMU for pose.
+- **The robot is a scissor-lift AMR**: a low grey deck with yellow side skirts
+  cut away over the drive wheels, a yellow scissor stack, and a grey top bar with
+  white LED strips and a camera unit at each end. The 640x480 camera rides a
+  powered lift that really raises it to each shelf level (0.56 / 1.21 / 1.86 m).
+  Drive is differential (TurtleBot3-Burger wheel geometry) with GPS + IMU.
+- **The scissor stack is a real linkage**, not a decoration: six stages of crossed
+  bars in two parallel stacks, pinned at every stage end and at each crossing,
+  with one sliding end on a chassis rail and one under the platform, and no
+  vertical member. `shelfscan/scissor.py` solves the bar poses from the lift
+  height on every control step - `theta = asin(stack_height / (n * L))` - so the
+  X's fold nearly flat (11 deg) at the lowest level and extend (70 deg) at the
+  highest. The links are visual-only `Pose` nodes with no bounding object, so
+  they cannot change the dynamics or the audit result.
 - **Scan order:** the audit completes one shelf side entirely, top level down and
   along the full length of each level, including any V4 re-verification detours,
   before crossing the aisle to the other side. The sides are never interleaved.
@@ -102,6 +110,8 @@ cp runs/shelfscan_v2/results.csv     models_v2/train_results.csv
 python experiments/run_batch.py eval --seeds 101-130 --seedwise --no-rendering     --results results_v2/runs --weights models_v2/shelfscan_yolov8n.pt
 python experiments/aggregate_results.py results_v2/runs results_v2     # results.csv + summary.md
 python webots/tools/make_shots.py --seed 101                           # docs/img/*.png
+python webots/tools/make_shots.py --seed 101 --lift                    # docs/figures/scissor_L*.png
+python webots/tools/make_shots.py --seed 101 --base                    # docs/figures/scissor_base.png
 python docs/build_submission.py                                        # deck, concept note, PDF
 ```
 
@@ -119,6 +129,7 @@ shelfscan/            core logic (no Webots dependency)
   viewpoint.py        next-best-view rule for unresolved slots
   policies.py         V1 fixed patrol / V3 re-scan / V4 active verification
   geometry.py         camera projection, slot visibility and blocker side
+  scissor.py          scissor-link kinematics (visual only) + the field driver
   robot_utils.py      Webots helpers (go-to-pose driver, camera lift, logging)
 webots/tools/make_world.py          randomised world (.wbt, base nodes only) + layout.json
 webots/tools/run_webots.py          launch Webots with timeout
@@ -126,8 +137,10 @@ webots/tools/overlay_check.py       draw labels on images to verify them
 webots/controllers/data_capture/    builds the YOLO dataset (labels from projected 3D geometry)
 webots/controllers/shelfscan_audit/ runs one strategy with the trained detector and scores it
 webots/controllers/snapshot/        renders overview images for the docs
-webots/tools/make_shots.py          renders docs/img/sim_overview.png and sim_aisle.png
+webots/tools/make_shots.py          renders the docs/img and docs/figures images
 webots/controllers/world_check/     dev-only: loads the world, checks the lift, saves frames
+webots/controllers/lift_shots/      dev-only: holds each level and checks the link placement
+docs/figures/                       the robot at each lift height, and a close view of its base
 train/train_yolo.py                 YOLOv8n fine-tune (+ optional INT8 export)
 models_v2/                          trained detector used for the results + its training log
 models/                             earlier detector from the colour-coded world (superseded)
@@ -170,8 +183,9 @@ tests/                              unit tests
 **Simulation only — nothing has run on a physical robot.** The cartons and their
 labels are rendered geometry with flat printed patterns, not photographs of real
 stock; the world is static; localisation is ideal (simulator GPS, not LiDAR/AMCL);
-and the robot is a scissor-lift *look-alike* built on small TurtleBot3-class
-running gear, so its proportions are not those of a real lift truck.
+and although the scissor linkage really folds and extends, it is built on small
+TurtleBot3-class running gear, so the robot's proportions are not those of a real
+lift truck.
 
 The two decision thresholds (confidence >= 0.60, visibility >= 0.70) are **design
 defaults, not tuned** on validation data. 6 of the 12 slots V4 left UNVERIFIED had

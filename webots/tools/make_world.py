@@ -25,7 +25,11 @@ import argparse
 import json
 import math
 import random
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from shelfscan import scissor as SC                              # noqa: E402
 
 # ---------------------------------------------------------------- SKUs --------
 # The 4 SKUs differ ONLY by the black/white print on the shipping label.
@@ -80,6 +84,13 @@ CAM_Z = CAM_LEVEL_Z[0]             # camera height with the lift fully down
 ROW_Y = (0.0, round(SHELF_DEPTH + AISLE_W, 4))   # rack centre y of each row
 RACK_LABEL = ("A", "B")
 AISLE_MID_Y = round((SHELF_DEPTH / 2 + ROW_Y[1] - SHELF_DEPTH / 2) / 2, 4)
+
+# The scissor stack must put the camera exactly where the lift does: the top
+# pivot row is TOP_DROP below the camera axis, so BASE_Z + stack + TOP_DROP has
+# to equal the camera height at every lift position. Checked here because a
+# silent mismatch would float the platform off the links.
+assert abs(SC.BASE_Z + SC.H_DOWN + SC.TOP_DROP - CAM_Z) < 1e-9
+assert SC.H_DOWN + LIFT_POS[-1] <= SC.SPAN
 
 
 def bay_x(k):
@@ -204,6 +215,7 @@ PALETTE = {
     "BOT_GREY":     (0.34, 0.35, 0.37, 0.55, 0.35, None),
     "BOT_YELLOW":   (0.95, 0.74, 0.08, 0.45, 0.20, None),
     "BOT_DARK":     (0.10, 0.10, 0.11, 0.60, 0.0, None),
+    "BOT_STEEL":    (0.47, 0.48, 0.50, 0.35, 0.80, None),
     "BOT_LED":      (1.00, 1.00, 1.00, 0.25, 0.0, (1.0, 1.0, 1.0)),
 }
 _SEEN = set()
@@ -391,19 +403,31 @@ def _building():
 
 
 def robot_node(x0, y0, yaw, controller):
-    """Scissor-lift look-alike built from base nodes only.
+    """Scissor-lift AMR built from base nodes only.
 
-    The drive train is unchanged from v1 (TurtleBot3-Burger geometry: wheel
-    r = 0.033 m, track 0.160 m) so shelfscan.robot_utils.Driver stays valid,
-    and the collision/physics body is still the small low cylinder, so the tall
-    mast cannot destabilise the chassis.
+    PHYSICS IS UNCHANGED from the previous world: the drive train is still
+    TurtleBot3 Burger geometry (wheel r = 0.033 m, track 0.160 m) so
+    shelfscan.robot_utils.Driver stays valid, the collision body is still the
+    same small low cylinder, the masses are the same, and the camera still
+    hangs off the lift carriage at carriage-local (0.05, 0, 0) with the same
+    640x480 / 1.0 rad optics. Only visual geometry changed.
 
-    The lift is real: a SliderJoint driven by a LinearMotor named "lift" raises
-    the top bar, and the 640x480 camera rides on that bar, so the camera height
-    really changes with the shelf level. The yellow crossed bars are a static,
-    simplified scissor mast. Every piece of mast and top-bar geometry is kept
-    at robot-local x <= 0.032, i.e. behind the camera at x = 0.05, so none of
-    it can enter the camera's field of view.
+    The lift is real: a SliderJoint driven by the LinearMotor named "lift"
+    raises the platform, and the camera rides on the top bar bolted rigidly to
+    that platform, so the camera height really changes with the shelf level.
+
+    The scissor stack is a true scissor linkage, not decoration: two parallel
+    stacks of crossed bars, pinned at every stage end and at each crossing,
+    with one sliding end on the chassis rail and one under the platform, and
+    no vertical member anywhere. The bar poses are recomputed from the lift
+    height by shelfscan.scissor on every control step - they are visual-only
+    Pose nodes with no bounding object, so they cannot affect the dynamics.
+    What is emitted here is the fully collapsed h = 0 state, which is what a
+    world opened without a controller shows.
+
+    Every part of the lift stays at robot-local x <= scissor.X_MAX = 0.032,
+    i.e. behind the camera at x = 0.05, so no part of the robot can enter its
+    own field of view at any height.
     """
     def wheel(side, y):
         return (f'HingeJoint {{ jointParameters HingeJointParameters {{ '
@@ -425,28 +449,72 @@ def robot_node(x0, y0, yaw, controller):
                 f'boundingObject Sphere {{ radius 0.015 }} '
                 f'physics Physics {{ density -1 mass 0.01 }} }}')
 
-    body = [_box(_app("BOT_GREY"), 0.24, 0.17, 0.055, 0, 0, 0.055),
-            _box(_app("BOT_YELLOW"), 0.24, 0.012, 0.050, 0, 0.088, 0.055),
-            _box(_app("BOT_YELLOW"), 0.24, 0.012, 0.050, 0, -0.088, 0.055),
-            _box(_app("BOT_DARK"), 0.25, 0.14, 0.018, 0, 0, 0.026)]
-    mast_h = CAM_Z + LIFT_POS[-1] + 0.12
-    for dy in (0.06, -0.06):
-        body.append(_box(_app("BOT_YELLOW"), 0.030, 0.030, mast_h - 0.10,
-                         -0.055, dy, 0.10 + (mast_h - 0.10) / 2))
-        for i in range(7):                                  # scissor lattice
-            zc = 0.14 + i * (mast_h - 0.24) / 7
-            for sgn in (1, -1):
-                body.append(
-                    f'Pose {{ translation -0.055 {dy} {zc:.4f} '
-                    f'rotation 0 1 0 {sgn * 0.62:.4f} children [ Shape {{ '
-                    f'appearance {_app("BOT_YELLOW")} '
-                    f'geometry Box {{ size 0.020 0.020 0.200 }} }} ] }}')
-    carriage = [_box(_app("BOT_GREY"), 0.12, 0.26, 0.035, -0.04, 0, -0.030),
-                _box(_app("BOT_LED"), 0.11, 0.020, 0.008, -0.04, 0.115, -0.008),
-                _box(_app("BOT_LED"), 0.11, 0.020, 0.008, -0.04, -0.115, -0.008),
-                _box(_app("BOT_DARK"), 0.05, 0.055, 0.045, 0, 0, 0),
-                _box(_app("BOT_DARK"), 0.05, 0.050, 0.045, 0, 0.105, 0),
-                _box(_app("BOT_DARK"), 0.05, 0.050, 0.045, 0, -0.105, 0)]
+    def pin(defname, x, y, z, r, hgt):
+        """A pivot pin. A Cylinder's axis is already +y, so pins never rotate."""
+        return (f'DEF {defname} Pose {{ translation {x:.4f} {y:.4f} {z:.4f} '
+                f'children [ Shape {{ appearance {_app("BOT_DARK")} '
+                f'geometry Cylinder {{ height {hgt} radius {r} }} }} ] }}')
+
+    def bar(defname, x, y, z, angle):
+        return (f'DEF {defname} Pose {{ translation {x:.4f} {y:.4f} {z:.4f} '
+                f'rotation 0 1 0 {angle:.6f} children [ Shape {{ '
+                f'appearance {_app("BOT_YELLOW")} geometry Box {{ size '
+                f'{SC.LINK_L} {SC.BAR_T} {SC.BAR_T} }} }} ] }}')
+
+    def channel(x, length, ys, z):
+        """The two cheeks that form the slot a pin runs in."""
+        return [_box(_app("BOT_STEEL"), length, SC.CHEEK_T, 0.020,
+                     x, ys + sgn * SC.CHEEK_DY, z) for sgn in (1, -1)]
+
+    # ---- base: a long low deck with yellow skirts flush with the wheels ----
+    # the sliding (back) pin runs between these two extremes
+    RAIL_A, RAIL_B = SC.back_x(0.0), SC.back_x(LIFT_POS[-1])
+    RAIL_X, RAIL_L = (RAIL_A + RAIL_B) / 2, RAIL_B - RAIL_A + 0.04
+    body = [
+        _box(_app("BOT_DARK"), 0.40, 0.14, 0.030, -0.11, 0, 0.045),
+        _box(_app("BOT_GREY"), 0.40, 0.22, 0.050, -0.11, 0, 0.085),
+        # side skirts, cut away over the drive wheels so the wheels show at
+        # their real axle positions instead of disappearing into the body
+        _box(_app("BOT_YELLOW"), 0.26, 0.012, 0.050, -0.18, 0.111, 0.085),
+        _box(_app("BOT_YELLOW"), 0.26, 0.012, 0.050, -0.18, -0.111, 0.085),
+        _box(_app("BOT_YELLOW"), 0.04, 0.012, 0.050, 0.07, 0.111, 0.085),
+        _box(_app("BOT_YELLOW"), 0.04, 0.012, 0.050, 0.07, -0.111, 0.085),
+        _box(_app("BOT_YELLOW"), 0.012, 0.22, 0.050, 0.094, 0, 0.085),
+        _box(_app("BOT_YELLOW"), 0.012, 0.22, 0.050, -0.314, 0, 0.085),
+        _box(_app("BOT_DARK"), 0.05, 0.05, 0.030, -0.29, 0, 0.125),
+    ]
+    for ys in (SC.STACK_DY, -SC.STACK_DY):
+        # yellow mounting frame the stack is bolted to, its top at BASE_Z
+        body.append(_box(_app("BOT_YELLOW"), 0.31, 0.072, 0.022,
+                         -0.13, ys, SC.BASE_Z - 0.013))
+        body += channel(RAIL_X, RAIL_L, ys, SC.BASE_Z + 0.002)     # sliding
+        body += channel(SC.X_FRONT, 0.030, ys, SC.BASE_Z + 0.002)  # pinned
+
+    # ---- the scissor links, emitted fully collapsed (h = 0) ---------------
+    links = []
+    for name, (lx, ly, lz), angle in SC.poses(0.0):
+        if name.startswith("SCB"):
+            links.append(bar(name, lx, ly, lz, angle))
+        elif name.startswith("SCX"):
+            links.append(pin(name, lx, ly, lz, SC.CROSS_R, SC.CROSS_H))
+        else:
+            links.append(pin(name, lx, ly, lz, SC.PIN_R, SC.PIN_H))
+    body.append(f'DEF SCISSOR Pose {{ children [ {" ".join(links)} ] }}')
+
+    # ---- platform + top bar, rigid on the carriage (camera axis at z = 0) --
+    carriage = [_box(_app("BOT_GREY"), 0.32, 0.26, 0.022, -0.132, 0, -0.080)]
+    for ys in (SC.STACK_DY, -SC.STACK_DY):
+        carriage += channel(RAIL_X, RAIL_L, ys, -SC.TOP_DROP)
+        carriage += channel(SC.X_FRONT, 0.030, ys, -SC.TOP_DROP)
+    carriage += [
+        _box(_app("BOT_YELLOW"), 0.030, 0.030, 0.0215, -0.04, 0.09, -0.0583),
+        _box(_app("BOT_YELLOW"), 0.030, 0.030, 0.0215, -0.04, -0.09, -0.0583),
+        _box(_app("BOT_GREY"), 0.12, 0.26, 0.035, -0.04, 0, -0.030),
+        _box(_app("BOT_LED"), 0.11, 0.020, 0.008, -0.04, 0.115, -0.008),
+        _box(_app("BOT_LED"), 0.11, 0.020, 0.008, -0.04, -0.115, -0.008),
+        _box(_app("BOT_DARK"), 0.05, 0.055, 0.045, 0, 0, 0),
+        _box(_app("BOT_DARK"), 0.05, 0.050, 0.045, 0, 0.105, 0),
+        _box(_app("BOT_DARK"), 0.05, 0.050, 0.045, 0, -0.105, 0)]
     for dy in (0.105, -0.105, 0.0):                         # lens discs
         carriage.append(
             f'Pose {{ translation 0.027 {dy} 0 rotation 0 0 1 -1.5708 '

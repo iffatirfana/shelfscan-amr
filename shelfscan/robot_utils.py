@@ -43,11 +43,26 @@ class Lift:
     Height is read from the supervisor rather than a position sensor, so what
     is checked is the real camera height in the world."""
 
-    def __init__(self, robot, step, defname="LIFT"):
+    def __init__(self, robot, step, defname="LIFT", links=None):
         self.robot, self.step = robot, step
         self.motor = robot.getDevice("lift")
         self.node = robot.getFromDef(defname)
         self.target = None
+        # Carriage height with the lift fully down, read from the world rather
+        # than hardcoded, so h() is the real travel whatever CAM_Z is.
+        self.z0 = self.node.getPosition()[2]
+        self.links = links
+
+    def h(self):
+        """Lift travel: carriage height above its fully-down position."""
+        return self.node.getPosition()[2] - self.z0
+
+    def tick(self):
+        """Pose the visual scissor links for the current travel. Called after
+        every control step, by Driver as well, so the stack folds and extends
+        while the base drives."""
+        if self.links is not None:
+            self.links.update(self.h())
 
     def request(self, pos):
         if pos != self.target:
@@ -62,6 +77,7 @@ class Lift:
         while abs(self.height() - cam_z) > tol and self.robot.getTime() < t_end:
             if self.robot.step(self.step) == -1:
                 raise SystemExit
+            self.tick()
         return self.height()
 
 
@@ -70,8 +86,9 @@ class Driver:
     No obstacle avoidance: viewpoint poses are on the open aisle side of the shelf.
     Tune the gains on first run."""
 
-    def __init__(self, robot, step):
+    def __init__(self, robot, step, on_step=None):
         self.robot, self.step = robot, step
+        self.on_step = on_step        # called after every simulation step
         self.l = robot.getDevice("left wheel motor")
         self.r = robot.getDevice("right wheel motor")
         for m in (self.l, self.r):
@@ -99,6 +116,8 @@ class Driver:
     def _tick(self):
         if self.robot.step(self.step) == -1:
             raise SystemExit
+        if self.on_step is not None:
+            self.on_step()
         x, y, _ = self.pose()
         if self._last:
             self.distance += math.hypot(x - self._last[0], y - self._last[1])

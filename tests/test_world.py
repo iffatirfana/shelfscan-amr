@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "webots/tools"))
 
-from make_world import CAM_Z, ITEM, make, wbt  # noqa: E402
+from make_world import CAM_Z, ITEM, LIFT_POS, make, wbt  # noqa: E402
+from shelfscan import scissor as sc             # noqa: E402
 from shelfscan.robot_utils import Driver        # noqa: E402
 
 sys.path.insert(0, str(ROOT / "experiments"))
@@ -63,6 +64,43 @@ class AggregateTests(unittest.TestCase):
             md = (Path(d) / "summary.md").read_text(encoding="utf-8")
             self.assertIn("100.0 ± 0.0%", md)
             self.assertIn("50.0 ± 0.0%", md)
+
+
+class ScissorTests(unittest.TestCase):
+    """The scissor stack is driven, not animated by hand, so its geometry has
+    to close exactly at every lift height the audit uses."""
+
+    def heights(self):
+        return [k / 100.0 for k in range(0, int(LIFT_POS[-1] * 100) + 1)]
+
+    def test_links_close_and_carry_the_camera(self):
+        for h in self.heights():
+            theta, spread, dz, stack = sc.geometry(h)
+            # every bar is exactly LINK_L long and ends on the row pins
+            for i in range(sc.N_STAGES):
+                for (x0, z0), (x1, z1) in sc.bar_ends(h, i):
+                    self.assertAlmostEqual(math.hypot(x1 - x0, z1 - z0),
+                                           sc.LINK_L, places=12)
+                    for z in (z0, z1):
+                        self.assertAlmostEqual((z - sc.BASE_Z) / dz,
+                                               round((z - sc.BASE_Z) / dz),
+                                               places=9)
+            # one stage rises LINK_L*sin(theta) and spreads LINK_L*cos(theta)
+            self.assertAlmostEqual(dz, sc.LINK_L * math.sin(theta), places=12)
+            self.assertAlmostEqual(spread, sc.LINK_L * math.cos(theta), places=12)
+            # the top pivot row puts the camera exactly where the lift does
+            self.assertAlmostEqual(sc.BASE_Z + stack + sc.TOP_DROP,
+                                   CAM_Z + h, places=9)
+
+    def test_stack_folds_and_stays_behind_the_camera(self):
+        lo, hi = sc.geometry(0.0), sc.geometry(LIFT_POS[-1])
+        self.assertLess(lo[0], hi[0])            # folds flat low, steep high
+        self.assertGreater(lo[1], hi[1])         # and so takes more room low
+        self.assertLess(math.degrees(lo[0]), 15.0)
+        self.assertGreater(math.degrees(hi[0]), 60.0)
+        for h in self.heights():
+            for _, (x, _, _), _ in sc.poses(h):
+                self.assertLessEqual(x + sc.CROSS_R, sc.X_MAX)
 
 
 if __name__ == "__main__":

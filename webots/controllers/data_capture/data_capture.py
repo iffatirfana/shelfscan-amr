@@ -24,6 +24,7 @@ from controller import Supervisor                               # noqa: E402
 from shelfscan.geometry import project_box, to_yolo, visibility_and_side  # noqa: E402
 from shelfscan.robot_utils import (CLASSES, Driver, Lift,        # noqa: E402
                                    content_box, load_layout)
+from shelfscan.scissor import ScissorLinks                       # noqa: E402
 
 OUT = Path(os.environ.get("SHELFSCAN_OUT", ROOT / "dataset"))
 VIEWPOINTS = ["center", "left", "right", "close"]
@@ -55,7 +56,9 @@ def main():
     W, H, fov = cam.getWidth(), cam.getHeight(), cam.getFov()
     cam_node = robot.getFromDef("CAM")
     drv = Driver(robot, step)
-    lift = Lift(robot, step)
+    links = ScissorLinks(robot)
+    lift = Lift(robot, step, links=links)
+    drv.on_step = lift.tick          # the scissor folds while the base drives
     bay = layout["bay_size"]
     tag = os.environ.get("SHELFSCAN_TAG", f"w{layout['seed']}")
     n = 0
@@ -70,6 +73,7 @@ def main():
             lift.settle(cur["cam_z"])
             for _ in range(2):
                 robot.step(step)
+                lift.tick()
 
             # Labels from the known 3D geometry of the rack level in view only
             # (other levels fall outside the camera's vertical field, and the
