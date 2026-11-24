@@ -3,6 +3,18 @@
 Env: SHELFSCAN_POLICY (V1_fixed | V3_rescan | V4_active), SHELFSCAN_WEIGHTS,
      SHELFSCAN_LAYOUT, SHELFSCAN_RESULTS (output dir, default results_v2).
 
+LABELS (MVP, SHELFSCAN_LABEL=qr|barcode, world built with --label): every
+frame is also read for machine-readable codes - QR with
+cv2.QRCodeDetector().detectAndDecodeMulti, Code128 with zxing-cpp, because
+pyzbar's bundled libzbar DLL will not load on this machine and OpenCV's
+BarcodeDetector decodes EAN/UPC only, not Code128. Each decoded code is matched to
+a slot by projecting that slot's nominal content region into the image and
+testing which region holds the code's centre, so the match uses the map and the
+robot's pose, never ground truth. A matched code decides the slot outright (OK
+if the SKU is the expected one, MISPLACED if not); a slot with no code falls
+back unchanged to the detector and the usual UNVERIFIED rules. The EMPTY rule
+and both thresholds (0.60 / 0.70) are untouched - a QR can never produce EMPTY.
+
 Scan order: one shelf side is scanned COMPLETELY - every level from the top
 down, the whole length of each level, including any V4 re-verification detours
 - before the robot crosses the aisle to the other side. The sides are never
@@ -26,6 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
+import cv2                                                      # noqa: E402
 import numpy as np                                               # noqa: E402
 from controller import Supervisor                                # noqa: E402
 from ultralytics import YOLO                                     # noqa: E402
@@ -40,6 +53,94 @@ from shelfscan.types import Observation, Status                  # noqa: E402
 
 CONF_MIN = 0.25
 IMGSZ = int(os.environ.get("SHELFSCAN_IMGSZ", "320"))   # must match training
+
+LABEL = os.environ.get("SHELFSCAN_LABEL") or (
+    "qr" if os.environ.get("SHELFSCAN_QR") == "1" else "")
+# Both readers miss codes on the native 640x480 frame that they read fine when
+# the frame is resampled 2x first (QR on seed 101: 8/11 -> 9/11 frames), for
+# about 55 ms a frame. The upscale adds no information; it just gives the
+# decoders more samples per module to work with.
+CODE_UPSCALE = 2
+
+
+def code_sku(text):
+    """SKU id out of a payload, or None.
+
+    Two payload forms carry the same pair: the QR spells it out as
+    "SKU=<id>;INV=<invoice>", while Code128 has to fit in a tenth of the
+    modules so it carries "<sku digit><seed><slot>" as six digits."""
+    text = (text or "").strip()
+    if text.isdigit() and len(text) == 6:
+        i = int(text[0]) - 1
+        return CLASSES[i] if 0 <= i < 4 else None
+    for part in text.split(";"):
+        k, _, v = part.partition("=")
+        if k.strip().upper() == "SKU" and v.strip() in CLASSES[:4]:
+            return v.strip()
+    return None
+
+
+def _scaled(img, k):
+    if k == 1:
+        return img
+    return cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC)
+
+
+def _read_qr(img):
+    """QR at a fixed 2x: detectAndDecodeMulti misses codes on the native frame
+    that detectAndDecode reads fine, and 2x recovers them (seed 101 sample:
+    8/11 -> 9/11 frames) for about 55 ms."""
+    big = _scaled(img, CODE_UPSCALE)
+    ok, infos, pts, _ = cv2.QRCodeDetector().detectAndDecodeMulti(big)
+    if not ok or pts is None:
+        return []
+    out = []
+    for text, quad in zip(infos, pts):
+        if text:
+            c = np.mean(np.asarray(quad, dtype=float), axis=0) / CODE_UPSCALE
+            out.append((text, (float(c[0]), float(c[1]))))
+    return out
+
+
+def _read_barcode(img):
+    """Code128 through zxing-cpp, as a short cascade.
+
+    A rendered barcode that a crop decodes perfectly is often not FOUND in the
+    full frame: the default local-average binarizer loses the thin bars against
+    the cardboard. Measured on the seed 101 sample frames, locating it costs a
+    cascade: default 0/11, formats=Code128 0/11, FixedThreshold 7/11, and this
+    cascade 9/11 at about 13 ms a frame - the same hit rate as the QR path."""
+    import zxingcpp
+
+    fmt = zxingcpp.BarcodeFormat.Code128
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    for k in (1, 2, 3):
+        g = _scaled(gray, k)
+        for binz in (zxingcpp.Binarizer.FixedThreshold,
+                     zxingcpp.Binarizer.LocalAverage):
+            found = zxingcpp.read_barcodes(g, formats=fmt, binarizer=binz)
+            if not found:
+                continue
+            out = []
+            for b in found:
+                if not b.text:
+                    continue
+                q = b.position
+                xs = [q.top_left.x, q.top_right.x, q.bottom_right.x,
+                      q.bottom_left.x]
+                ys = [q.top_left.y, q.top_right.y, q.bottom_right.y,
+                      q.bottom_left.y]
+                out.append((b.text, (sum(xs) / 4.0 / k, sum(ys) / 4.0 / k)))
+            if out:
+                return out
+    return []
+
+
+def read_codes(img):
+    """[(payload, (cx, cy))] for every code in the frame, in frame pixels."""
+    if not LABEL:
+        return []
+    return _read_qr(img) if LABEL == "qr" else _read_barcode(img)
 
 
 def true_status(exp, act):
@@ -72,6 +173,8 @@ def main():
     drv.on_step = lift.tick          # the scissor folds while the base drives
     twin = DigitalTwin({sid: s["expected"] for sid, s in slots.items()})
     n_frames = 0
+    qr_read = {}          # slot_id -> payload, for the report only
+    qr_frames = 0
 
     order = layout["order"]
     sides = list(dict.fromkeys(slots[sid]["rack"] for sid in order))
@@ -96,7 +199,7 @@ def main():
               f"slots decided", flush=True)
 
     def observe(sid, vp):
-        nonlocal n_frames
+        nonlocal n_frames, qr_frames
         s = slots[sid]
         key = (s["rack"], s["level"])
         if current["key"] != key:
@@ -116,8 +219,39 @@ def main():
 
         o9 = cam_node.getOrientation()
         rot = [o9[0:3], o9[3:6], o9[6:9]]
-        centre, csize = content_box(s, bay)
-        sb = project_box(cam_node.getPosition(), rot, centre, csize, fov, W, H)
+        cam_pos = cam_node.getPosition()
+
+        def slot_box(other):
+            c, sz = content_box(other, bay)
+            return project_box(cam_pos, rot, c, sz, fov, W, H)
+
+        # ---- QR pass: map every code in this frame onto a slot ------------
+        qr_here = {}
+        if LABEL:
+            level_ids = [i for i in order if slots[i]["rack"] == s["rack"]
+                         and slots[i]["level"] == s["level"]]
+            slot_boxes = {i: slot_box(slots[i]) for i in level_ids}
+            codes = read_codes(img)
+            if codes:
+                qr_frames += 1
+            for text, (cx, cy) in codes:
+                sku = code_sku(text)
+                if sku is None:
+                    continue
+                for i in level_ids:
+                    b = slot_boxes[i]
+                    if b and b[0] <= cx <= b[2] and b[1] <= cy <= b[3]:
+                        qr_here[i] = (text, sku)
+                        qr_read[i] = text
+                        break
+            # codes for OTHER slots on this level are free information: a code
+            # that decodes is unambiguous, so record it rather than discard it
+            for i, (text, sku) in qr_here.items():
+                if i != sid:
+                    twin.update(Observation(i, sku, 1.0, 1.0, None, vp,
+                                            robot.getTime()))
+
+        sb = slot_boxes[sid] if LABEL else slot_box(s)
         if sb is None:
             print(f"obs {sid} vp={vp} slot not in view", flush=True)
             return Observation(sid, None, 0.0, 0.0, None, vp, robot.getTime())
@@ -125,6 +259,15 @@ def main():
         def inside(b):
             cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
             return sb[0] <= cx <= sb[2] and sb[1] <= cy <= sb[3]
+
+        if sid in qr_here:
+            text, sku = qr_here[sid]
+            px, py, pyaw = drv.pose()
+            print(f"obs {sid} vp={vp} {LABEL.upper()}={text} -> {sku} "
+                  f"pose=({px:.2f},{py:.2f},{pyaw:.2f})", flush=True)
+            # a code you can read is a code you can see: full confidence and
+            # full visibility, so classify() gives OK or MISPLACED, never EMPTY
+            return Observation(sid, sku, 1.0, 1.0, None, vp, robot.getTime())
 
         own = [(b, c, p) for b, c, p in boxes if c != "blocker" and inside(b)]
         label, conf = (None, 0.0)
@@ -171,6 +314,11 @@ def main():
     not_empty = [sid for sid in order if truth[sid] != Status.EMPTY]
     false_empty = sum(1 for sid in not_empty if final[sid] == Status.EMPTY)
     true_empty = [sid for sid in order if truth[sid] == Status.EMPTY]
+    # QR stats. Ground truth is read here, in the scoring section, only - the
+    # decisions above were taken from the decoded payload alone.
+    qr_with_carton = [sid for sid in order if slots[sid]["actual"]]
+    qr_wrong = sorted(sid for sid, txt in qr_read.items()
+                      if code_sku(txt) != slots[sid]["actual"])
     out = dict(policy=policy, seed=layout["seed"], n_slots=len(order),
                correct=correct, slot_accuracy=correct / len(order),
                decided=decided,
@@ -185,6 +333,13 @@ def main():
                false_alarms=false_alarms,
                audit_time_s=round(elapsed, 2), distance_m=round(drv.distance, 2),
                frames=n_frames, weights=str(weights),
+               qr=bool(LABEL), label_type=LABEL or None,
+               qr_slots_decoded=len(qr_read),
+               qr_slots_with_carton=len(qr_with_carton),
+               qr_decode_rate=(len(qr_read) / len(qr_with_carton)
+                               if qr_with_carton else None),
+               qr_frames_with_a_code=qr_frames,
+               qr_wrong_payload=len(qr_wrong), qr_wrong_slots=qr_wrong,
                n_sides=layout.get("n_sides"), n_levels=layout.get("n_levels"),
                n_bays=layout.get("n_bays"), scan_order="side_by_side_top_down",
                per_side=per_side)
@@ -195,7 +350,7 @@ def main():
         w.writerow(["scan_index", "slot_id", "side", "level", "bay", "size_class",
                     "expected", "actual", "blocker", "occluder", "true_status",
                     "final_status", "observed_label", "confidence", "observations",
-                    "last_viewpoint"])
+                    "last_viewpoint", "qr_text"])
         for i, sid in enumerate(order):
             r, s = twin.slots[sid], slots[sid]
             w.writerow([i, sid, s["rack"], s["level"], s["bay"], s["size_class"],
@@ -203,7 +358,8 @@ def main():
                         s["blocker_kind"] or "", s["occluder"] or "",
                         truth[sid].value, r.status.value,
                         r.observed_label or "", round(r.confidence, 3),
-                        r.n_observations, r.last_viewpoint])
+                        r.n_observations, r.last_viewpoint,
+                        qr_read.get(sid, "")])
     print(json.dumps(out))
     robot.simulationQuit(0)
 

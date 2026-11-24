@@ -59,6 +59,39 @@ PRINT_FRAC = 0.90         # printed area / label
 PRINT_UNITS = 5           # bar thickness = gap = printed extent / 5
 SEAM_T = 0.016            # front-seam tape height
 
+# ------------------------------------------------------------------- QR ------
+# MVP option (--qr): the printed pattern is replaced by a QR code textured onto
+# the label. The QR is square and as large as the carton face allows, and in QR
+# mode the front seam tape is left off so the flattest class (wide_flat, 0.18 m
+# high) still gets a usable code. Sizes on a 640x480 frame at the centre
+# viewpoint (fx = 320/tan(0.5) = 585.7 px, 0.90 m away):
+#     wide_flat 108 px, small 120, medium 150, large 180, tall 176
+# all well over the 70 px floor, and >= 3.7 px per module for the 29-module
+# image (version 2 + a 2-module quiet zone), which decodes reliably.
+QR_W_FRAC = 0.90          # QR side / carton face width
+QR_H_FRAC = 0.92          # QR side / carton height
+QR_BORDER = 2             # quiet zone, in modules, baked into the image
+
+# Code128 is far harder to fit than a QR. It spends 11 modules per character
+# plus start, check, stop and quiet zones, all in ONE dimension, so the module
+# count is set by the payload length and the pixel budget by the carton width:
+#   'SKU=sku_A;INV=INV-101-13'  333 modules -> needs 2664 px for 8 px/bar
+#   'A;101-13'                  133 modules -> needs 1064 px
+#   '110113' (Code128-C digits)  77 modules -> needs  616 px
+# The frame is only 640 px wide and the widest carton face covers ~312 px of
+# it, so 8 px per bar is not reachable at this camera resolution for any
+# payload. The compact 6-digit form carries the same (SKU, invoice) pair and
+# measures 2.03 px/bar on the narrowest class and 4.05 on the widest, which
+# zxing-cpp decodes; see docs/MVP_LABELS.md for the measured rates.
+BC_W_FRAC = 0.96          # barcode width / carton face width
+BC_ASPECT = 0.40          # barcode height / its width
+BC_H_FRAC = 0.70          # ... but never more than this much of the carton
+BC_TEX_W = 1024           # texture pixels across
+
+CODE_DIR = "codes"        # image folder, relative to the world file
+WORLDS = Path(__file__).resolve().parents[1] / "worlds"
+SKU_DIGIT = {s: str(i + 1) for i, s in enumerate(SKUS)}   # sku_A -> "1"
+
 # --------------------------------------------------------------- racking ------
 SIDES, LEVELS, BAYS = 2, 3, 5      # -> 2 * 3 * 5 = 30 slots per seed
 BAY_W = 0.60                       # bay pitch along x
@@ -101,9 +134,37 @@ def slot_id(r, l, k):
     return f"S{r}-{l}-{k}"
 
 
-def make(seed, p_empty=0.08, p_mis=0.08, p_occ=0.20, p_exp_empty=0.05):
+def slot_index(sid):
+    r, l, k = (int(v) for v in sid[1:].split("-"))
+    return r * LEVELS * BAYS + l * BAYS + k
+
+
+def code_text(seed, sid, sku, label):
+    """The payload printed on one carton, for the chosen label type.
+
+    Both forms carry the same two facts - which SKU, and an invoice number
+    unique to (seed, slot). The QR spells them out; Code128 cannot afford the
+    characters (see the note above), so it carries the same pair as six digits:
+    SKU index, then the seed, then the slot index.
+
+    Derived from the seed and the slot id alone, so it consumes NO random
+    numbers: the layout of a seed is byte for byte what it was before labels
+    existed."""
+    i = slot_index(sid)
+    if label == "barcode":
+        return f"{SKU_DIGIT[sku]}{seed:03d}{i:02d}"
+    return f"SKU={sku};INV=INV-{seed:03d}-{i:02d}"
+
+
+def make(seed, p_empty=0.08, p_mis=0.08, p_occ=0.20, p_exp_empty=0.05,
+         label=None):
     """Deterministic per seed: the RNG is consumed in a fixed (row, level, bay)
-    order, independent of the scan order written to layout["order"]."""
+    order, independent of the scan order written to layout["order"].
+
+    label="qr" or "barcode" only ADDS fields (code_text per slot, label at the
+    top level); it draws no extra random numbers, so every other value is
+    identical either way."""
+    assert label in (None, "qr", "barcode"), label
     rng = random.Random(seed)
     slots = {}
     for r in range(SIDES):
@@ -174,13 +235,17 @@ def make(seed, p_empty=0.08, p_mis=0.08, p_occ=0.20, p_exp_empty=0.05):
                     blocker_kind=b_kind, blocker_class=b_cls,
                     blocker_size=b_size, blocker_pos=b_pos, blocker_yaw=b_yaw,
                     viewpoints=vps)
+    if label:
+        for sid, s in slots.items():
+            s["code_text"] = (code_text(seed, sid, s["actual"], label)
+                              if s["actual"] else None)
     # ---- scan order: one side at a time, top level down, serpentine ----------
     order = []
     for r in range(SIDES):
         for i, l in enumerate(range(LEVELS - 1, -1, -1)):
             ks = range(BAYS) if i % 2 == 0 else range(BAYS - 1, -1, -1)
             order += [slot_id(r, l, k) for k in ks]
-    return dict(seed=seed, n_slots=len(slots),
+    return dict(seed=seed, n_slots=len(slots), label=label,
                 n_sides=SIDES, n_levels=LEVELS, n_bays=BAYS,
                 level_z=list(LEVEL_Z), cam_level_z=list(CAM_LEVEL_Z),
                 lift_positions=list(LIFT_POS),
@@ -322,16 +387,54 @@ def _label_print(sku, pw, ph, y, lz):
     return out
 
 
-def _carton_children(size, shade, sku):
+def qr_side(size):
+    """Side (m) of the QR square on a carton of this size."""
+    sx, _, sz = size
+    return round(min(QR_W_FRAC * sx, QR_H_FRAC * sz), 4)
+
+
+def barcode_rect(size):
+    """(width, height) in m of the Code128 label: as wide as the face allows."""
+    sx, _, sz = size
+    w = BC_W_FRAC * sx
+    return round(w, 4), round(min(BC_ASPECT * w, BC_H_FRAC * sz), 4)
+
+
+def _carton_children(size, shade, sku, code=None, label=None):
     """Corrugated carton: brown body, darker tape across the top and along the
     front seam, and - for a real SKU carton - a white shipping label carrying
-    the black print. Local +y is the aisle-facing direction."""
+    the black print. Local +y is the aisle-facing direction.
+
+    With `code` set, the label carries that QR or Code128 image as a texture
+    instead of the printed pattern. In QR mode the front seam tape is left off
+    so the code can run the full height of even the flattest carton; the
+    barcode is short enough not to need that."""
     sx, sy, sz = size
     out = [_box(_card_app(shade), sx, sy, sz),
-           _box(_app("CARD_TAPE"), 0.055, sy + 0.004, 0.004, 0, 0, sz / 2 + 0.002),
-           _box(_app("CARD_TAPE"), sx + 0.004, 0.004, SEAM_T,
-                0, sy / 2 + 0.002, sz / 2 - SEAM_T / 2)]
-    if sku:
+           _box(_app("CARD_TAPE"), 0.055, sy + 0.004, 0.004, 0, 0, sz / 2 + 0.002)]
+    if not (code and label == "qr"):
+        out.append(_box(_app("CARD_TAPE"), sx + 0.004, 0.004, SEAM_T,
+                        0, sy / 2 + 0.002, sz / 2 - SEAM_T / 2))
+    if code:
+        if label == "barcode":
+            cw, ch = barcode_rect(size)
+            cz = -0.04 * sz
+        else:
+            cw = ch = qr_side(size)
+            cz = 0.0
+        # filtering 0 (nearest) keeps a QR crisp, and a QR survives the
+        # aliasing because of its error correction. A Code128 has none: at
+        # 1024 px of texture rendered into ~320 px, nearest sampling drops two
+        # columns in three and merges narrow bars, which is fatal. Barcodes
+        # therefore use Webots' filtering so the downsample averages instead.
+        filt = 0 if label == "qr" else 4
+        out.append(
+            f'Pose {{ translation 0 {sy / 2 + 0.0025:.4f} {cz:.4f} children [ '
+            f'Shape {{ appearance PBRAppearance {{ baseColor 1 1 1 '
+            f'roughness 0.55 metalness 0 baseColorMap ImageTexture {{ '
+            f'url [ "{CODE_DIR}/{code}.png" ] filtering {filt} }} }} '
+            f'geometry Box {{ size {cw} 0.003 {ch} }} }} ] }}')
+    elif sku:
         lw, lh = LABEL_W_FRAC * sx, LABEL_H_FRAC * sz
         lz = LABEL_Z_FRAC * sz
         out.append(_box(_app("LABEL_WHITE"), lw, 0.003, lh,
@@ -542,8 +645,73 @@ def robot_node(x0, y0, yaw, controller):
             f'physics Physics {{ density -1 mass 1.0 }} }}')
 
 
+def code_name(layout, sid):
+    return f"{layout['label']}_{layout['seed']:03d}_{sid}"
+
+
+def _code_tex(layout, sid):
+    """Texture basename for a slot's carton, or None when not in label mode."""
+    if not layout.get("label") or not layout["slots"][sid].get("code_text"):
+        return None
+    return code_name(layout, sid)
+
+
+def _qr_image(text, px):
+    import qrcode
+    q = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L,
+                      box_size=10, border=QR_BORDER)
+    q.add_data(text)
+    q.make(fit=True)
+    img = q.make_image(fill_color="black", back_color="white")
+    return img.convert("L").resize((px, px))
+
+
+def _barcode_image(text, w, h):
+    """Code128, stretched to exactly the box aspect so bars are not skewed."""
+    import io
+
+    import barcode
+    from barcode.writer import ImageWriter
+    from PIL import Image
+
+    buf = io.BytesIO()
+    barcode.get("code128", text, writer=ImageWriter()).write(
+        buf, {"module_width": 0.6, "module_height": 12.0, "quiet_zone": 2.0,
+              "font_size": 0, "text_distance": 0, "dpi": 600})
+    return Image.open(buf).convert("L").resize((w, h), Image.LANCZOS)
+
+
+def write_code_images(layout, worlds_dir=None, px=640):
+    """Render one PNG per labelled carton into <worlds>/codes/.
+
+    Written next to the world file so the .wbt can reference them with a
+    relative url, which keeps the per-run worlds that run_batch generates
+    working without any path rewriting. The qrcode / python-barcode imports are
+    lazy so the generator still runs, in plain mode, without them installed."""
+    out = Path(worlds_dir or WORLDS) / CODE_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for sid, s in layout["slots"].items():
+        text = s.get("code_text")
+        if not text:
+            continue
+        f = out / f"{code_name(layout, sid)}.png"
+        if not f.exists():
+            if layout["label"] == "barcode":
+                bw, bh = barcode_rect(s["carton_size"])
+                img = _barcode_image(text, BC_TEX_W,
+                                     max(32, round(BC_TEX_W * bh / bw)))
+            else:
+                img = _qr_image(text, px)
+            img.save(f)
+        n += 1
+    return n
+
+
 def wbt(layout, version, controller="shelfscan_audit"):
     _SEEN.clear()
+    if layout.get("label"):
+        write_code_images(layout)
     L = []
     a = L.append
     a(f"#VRML_SIM {version} utf8")
@@ -577,14 +745,18 @@ def wbt(layout, version, controller="shelfscan_audit"):
                 for i, dx in enumerate((-(sx / 2 + 0.02), sx / 2 + 0.02)):
                     a(_solid(f"item_{n}_{i}",
                              _carton_children(s["carton_size"],
-                                              s["carton_shade"], s["actual"]),
+                                              s["carton_shade"], s["actual"],
+                                              _code_tex(layout, sid),
+                                              layout.get("label")),
                              cx + dx, cy, cz, base_yaw + s["carton_yaw"],
                              model=s["actual"], rec=(0.62, 0.47, 0.32),
                              defname=f"ITEM_{n}_{i}"))
             else:
                 a(_solid(f"item_{n}",
                          _carton_children(s["carton_size"],
-                                          s["carton_shade"], s["actual"]),
+                                          s["carton_shade"], s["actual"],
+                                          _code_tex(layout, sid),
+                                          layout.get("label")),
                          cx, cy, cz, base_yaw + s["carton_yaw"],
                          model=s["actual"], rec=(0.62, 0.47, 0.32),
                          defname=f"ITEM_{n}"))
@@ -609,10 +781,14 @@ def main():
     ap.add_argument("--out", default="webots/worlds")
     ap.add_argument("--version", default="R2025a")
     ap.add_argument("--controller", default="shelfscan_audit")
+    ap.add_argument("--label", choices=["qr", "barcode"], default=None,
+                    help="put a machine-readable code on each carton label "
+                         "instead of the printed SKU pattern (MVP)")
+    ap.add_argument("--qr", action="store_true", help="shorthand for --label qr")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    lay = make(a.seed)
+    lay = make(a.seed, label=a.label or ("qr" if a.qr else None))
     (out / "layout.json").write_text(json.dumps(lay, indent=1))
     (out / "warehouse.wbt").write_text(wbt(lay, a.version, a.controller))
     cls, sku, blk = {}, {}, {}

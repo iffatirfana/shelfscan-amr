@@ -39,8 +39,9 @@ def seeds(spec):
     return out
 
 
-def run_one(tag, seed, controller, env_extra, timeout, version, no_render=False):
-    lay = make(seed)
+def run_one(tag, seed, controller, env_extra, timeout, version, no_render=False,
+            label=None):
+    lay = make(seed, label=label)
     layout = WORLDS / f"_layout_{tag}.json"
     world = WORLDS / f"_run_{tag}.wbt"
     layout.write_text(json.dumps(lay, indent=1))
@@ -72,11 +73,12 @@ def eval_seedwise(a):
     for i, seed in enumerate(seeds(a.seeds), 1):
         jobs = [(f"{p}_s{seed}", seed, "shelfscan_audit",
                  {"SHELFSCAN_POLICY": p, "SHELFSCAN_RESULTS": a.results,
-                  "SHELFSCAN_WEIGHTS": a.weights}) for p in pols]
+                  "SHELFSCAN_WEIGHTS": a.weights,
+                  "SHELFSCAN_LABEL": a.label or ""}) for p in pols]
         t0 = time.time()
         with ThreadPoolExecutor(len(jobs)) as ex:
             list(ex.map(lambda j: run_one(*j, a.timeout, a.version,
-                                          a.no_rendering), jobs))
+                                          a.no_rendering, a.label), jobs))
         for j in jobs:
             for pth in (WORLDS / f"_run_{j[0]}.wbt", WORLDS / f"_layout_{j[0]}.json",
                         WORLDS / f"._run_{j[0]}.wbproj"):
@@ -113,11 +115,16 @@ def main():
     ap.add_argument("--version", default="R2025a")
     ap.add_argument("--weights", default=str(ROOT / "models_v2/shelfscan_yolov8n.pt"))
     ap.add_argument("--no-rendering", action="store_true")
+    ap.add_argument("--label", choices=["qr", "barcode"], default=None,
+                    help="MVP: build the world with machine-readable carton "
+                         "labels and let the audit read them")
+    ap.add_argument("--qr", action="store_true", help="shorthand for --label qr")
     ap.add_argument("--seedwise", action="store_true",
                     help="eval mode: finish all strategies of one seed before "
                          "starting the next, so an early stop still leaves a "
                          "fair like-for-like comparison")
     a = ap.parse_args()
+    a.label = a.label or ("qr" if a.qr else None)
 
     if a.mode == "eval" and a.seedwise:
         return eval_seedwise(a)

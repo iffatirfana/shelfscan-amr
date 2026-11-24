@@ -9,3 +9,10 @@ __pycache__/
 webots/worlds/.*.wbproj
 /dataset_v2/
 !models_v2/*.pt
+
+# label-MVP build artefacts: regenerated deterministically from the seed
+webots/worlds/codes/
+webots/worlds/warehouse_qr.wbt
+webots/worlds/warehouse_bc.wbt
+webots/worlds/layout_qr.json
+webots/worlds/layout_bc.json
