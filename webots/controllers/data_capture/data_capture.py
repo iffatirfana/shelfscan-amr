@@ -1,11 +1,14 @@
 """Drive to viewpoints around every slot, save frames and YOLO labels.
 
 Labels come from the simulator and are used ONLY to build the training set:
-projection of the known 3D boxes (items, blockers, empty slot volumes) of the
-row being scanned. Items are kept if >= 35% unoccluded, empty slots if >= 70%.
-The deployed detector (shelfscan_audit) sees camera pixels only.
+projection of the known 3D boxes (cartons, blockers, empty bay volumes) of the
+rack level being scanned. Cartons are kept if >= 35% unoccluded, empty bays if
+>= 70%. The deployed detector (shelfscan_audit) sees camera pixels only.
 
-STATUS: written without access to Webots; first run may need small fixes.
+Labels use each carton's TRUE size and pose so the boxes are tight. That is
+ground truth, which is legitimate here (this builds the training set) but is
+never available to shelfscan_audit, which projects a nominal bay region.
+
 Run after generating a world: python webots/tools/make_world.py --seed N
 Env: SHELFSCAN_OUT (dataset dir), SHELFSCAN_LAYOUT.
 """
@@ -19,14 +22,26 @@ sys.path.insert(0, str(ROOT))
 
 from controller import Supervisor                               # noqa: E402
 from shelfscan.geometry import project_box, to_yolo, visibility_and_side  # noqa: E402
-from shelfscan.robot_utils import CLASSES, Driver, load_layout   # noqa: E402
+from shelfscan.robot_utils import (CLASSES, Driver, Lift,        # noqa: E402
+                                   content_box, load_layout)
 
 OUT = Path(os.environ.get("SHELFSCAN_OUT", ROOT / "dataset"))
 VIEWPOINTS = ["center", "left", "right", "close"]
 JITTER = 0.08
-OCC_Z = 0.30 + 0.04 / 2 + 0.175     # must match make_world.py
-OCC_SIZE = (0.25, 0.25, 0.35)
 VAL_FRAC = 0.15
+
+
+def carton_boxes(s):
+    """True world boxes of a slot's carton(s): (centre, size) each."""
+    if not s["actual"]:
+        return []
+    sx, sy, sz = s["carton_size"]
+    cx, cy, cz = s["carton_pos"]
+    if s["n_cartons"] == 2:
+        off = sx / 2 + 0.02
+        return [((cx - off, cy, cz), (sx, sy, sz)),
+                ((cx + off, cy, cz), (sx, sy, sz))]
+    return [((cx, cy, cz), (sx, sy, sz))]
 
 
 def main():
@@ -40,25 +55,31 @@ def main():
     W, H, fov = cam.getWidth(), cam.getHeight(), cam.getFov()
     cam_node = robot.getFromDef("CAM")
     drv = Driver(robot, step)
-    size = layout["slot_size"]
+    lift = Lift(robot, step)
+    bay = layout["bay_size"]
     tag = os.environ.get("SHELFSCAN_TAG", f"w{layout['seed']}")
     n = 0
 
     for sid in layout["order"]:
+        cur = layout["slots"][sid]
         for vp in VIEWPOINTS:
-            x, y, yaw = layout["slots"][sid]["viewpoints"][vp]
-            drv.go_to(x + rng.uniform(-JITTER, JITTER), y + rng.uniform(-JITTER, JITTER), yaw)
+            x, y, yaw = cur["viewpoints"][vp]
+            lift.request(cur["lift"])
+            drv.go_to(x + rng.uniform(-JITTER, JITTER),
+                      y + rng.uniform(-JITTER, JITTER), yaw)
+            lift.settle(cur["cam_z"])
             for _ in range(2):
                 robot.step(step)
 
-            # Labels from the known 3D geometry of the CURRENT row only (other
-            # rows are hidden behind it). Webots Recognition boxes were checked
-            # with overlay_check.py and found to be loose, so they are not used.
+            # Labels from the known 3D geometry of the rack level in view only
+            # (other levels fall outside the camera's vertical field, and the
+            # far rack is behind the robot). Webots Recognition boxes were
+            # checked with overlay_check.py and found loose, so are not used.
             pos = cam_node.getPosition()
             o9 = cam_node.getOrientation()
             rot = [o9[0:3], o9[3:6], o9[6:9]]
-            row_y = layout["slots"][sid]["y"]
-            row = [s for s in layout["slots"].values() if abs(s["y"] - row_y) < 1e-6]
+            level = [s for s in layout["slots"].values()
+                     if s["rack"] == cur["rack"] and s["level"] == cur["level"]]
 
             def proj(c, sz):
                 bb = project_box(pos, rot, c, sz, fov, W, H)
@@ -67,21 +88,28 @@ def main():
                 return bb
 
             boxes, blockers = [], []
-            for s in row:
+            for s in level:
                 if s["occluder"]:
-                    sign = 1 if s["occluder"] == "left" else -1
-                    bb = proj((s["x"] + sign * 0.14, s["face_y"] + 0.30, OCC_Z), OCC_SIZE)
+                    bb = proj(tuple(s["blocker_pos"]), tuple(s["blocker_size"]))
                     if bb:
                         boxes.append(("blocker", bb)); blockers.append(bb)
-            for s in row:
-                bb = proj((s["x"], s["face_y"] - size[1] / 2 - 0.02, s["z"]), size)
-                if bb is None or bb[0] <= 1 or bb[2] >= W - 1:
-                    continue                                   # cut by image edge
-                vis, _ = visibility_and_side(bb, blockers)
-                if s["actual"] is not None and vis >= 0.35:
-                    boxes.append((s["actual"], bb))
-                elif s["actual"] is None and vis >= 0.7:
-                    boxes.append(("slot_empty", bb))
+            for s in level:
+                if s["actual"]:
+                    for c, sz in carton_boxes(s):
+                        bb = proj(c, sz)
+                        if bb is None or bb[0] <= 1 or bb[2] >= W - 1:
+                            continue                           # cut by image edge
+                        vis, _ = visibility_and_side(bb, blockers)
+                        if vis >= 0.35:
+                            boxes.append((s["actual"], bb))
+                else:
+                    c, sz = content_box(s, bay)
+                    bb = proj(c, sz)
+                    if bb is None or bb[0] <= 1 or bb[2] >= W - 1:
+                        continue
+                    vis, _ = visibility_and_side(bb, blockers)
+                    if vis >= 0.7:
+                        boxes.append(("slot_empty", bb))
 
             if not boxes:
                 continue

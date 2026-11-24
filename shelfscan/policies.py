@@ -31,16 +31,22 @@ def v1_fixed_patrol(twin: DigitalTwin, observe: Observe, order: List[str]):
 def v3_rescan_same_view(twin: DigitalTwin, observe: Observe, order: List[str],
                         max_tries: int = 1):
     _patrol(twin, observe, order)
+    scope = set(order)
     for _ in range(max_tries):
         for rec in twin.unresolved():
-            twin.update(observe(rec.slot_id, "center"))
+            if rec.slot_id in scope:
+                twin.update(observe(rec.slot_id, "center"))
 
 
 def v4_active_verification(twin: DigitalTwin, observe: Observe, order: List[str],
                            max_tries: int = 3):
     tried = _patrol(twin, observe, order)
+    scope = set(order)
     for _ in range(max_tries):
-        pending = twin.unresolved()
+        # Only slots this call was asked to audit. The twin may hold slots the
+        # caller is handling separately (one shelf side at a time), and those
+        # start out UNVERIFIED simply because they have not been visited yet.
+        pending = [r for r in twin.unresolved() if r.slot_id in scope]
         if not pending:
             break
         for rec in pending:

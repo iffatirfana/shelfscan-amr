@@ -64,7 +64,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--timeout", type=float, default=900)
     ap.add_argument("--policies", default=",".join(POLICIES))
-    ap.add_argument("--results", default=str(ROOT / "results/runs"))
+    ap.add_argument("--results", default=str(ROOT / "results_v2/runs"))
     ap.add_argument("--version", default="R2025a")
     a = ap.parse_args()
 

@@ -21,6 +21,50 @@ def wrap(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
+CONTENT_DEPTH = 0.30     # nominal depth of the region where a bay's content sits
+
+
+def content_box(slot, bay_size):
+    """Centre and size of the region where a slot's content is expected to be.
+
+    Deliberately the SAME shape for every slot: it is derived only from the bay
+    geometry the robot knows from its map, never from the true carton size,
+    which is ground truth the robot does not have."""
+    cy = slot["front_y"] - slot["facing"] * CONTENT_DEPTH / 2
+    return ((slot["x"], cy, slot["deck_top"] + bay_size[2] / 2),
+            (bay_size[0], CONTENT_DEPTH, bay_size[2]))
+
+
+class Lift:
+    """The camera lift: a SliderJoint driven by the LinearMotor named "lift".
+
+    `request` starts the move and returns at once, so the lift travels while
+    the base drives; `settle` then waits for the carriage to reach the level.
+    Height is read from the supervisor rather than a position sensor, so what
+    is checked is the real camera height in the world."""
+
+    def __init__(self, robot, step, defname="LIFT"):
+        self.robot, self.step = robot, step
+        self.motor = robot.getDevice("lift")
+        self.node = robot.getFromDef(defname)
+        self.target = None
+
+    def request(self, pos):
+        if pos != self.target:
+            self.motor.setPosition(pos)
+            self.target = pos
+
+    def height(self):
+        return self.node.getPosition()[2]
+
+    def settle(self, cam_z, tol=0.005, timeout_s=15.0):
+        t_end = self.robot.getTime() + timeout_s
+        while abs(self.height() - cam_z) > tol and self.robot.getTime() < t_end:
+            if self.robot.step(self.step) == -1:
+                raise SystemExit
+        return self.height()
+
+
 class Driver:
     """Go-to-pose for a differential-drive robot using GPS + IMU feedback.
     No obstacle avoidance: viewpoint poses are on the open aisle side of the shelf.
@@ -60,31 +104,16 @@ class Driver:
             self.distance += math.hypot(x - self._last[0], y - self._last[1])
         self._last = (x, y)
 
-    AISLE_X = -0.8          # x of the free aisle at the end of the shelf rows
+    AISLE_X = -0.8          # x of the free aisle end, where the robot starts
 
     def go_to(self, x, y, yaw, tol=0.04, yaw_tol=0.04, timeout_s=60.0):
-        """Drive to (x, y) then turn to yaw. If the target is in another aisle
-        (|dy| > 1 m), route via the aisle end so the robot never crosses a row."""
-        px, py, _ = self.pose()
-        if abs(y - py) > 1.0:
-            self._go_point(self.AISLE_X, py, tol=0.10, timeout_s=timeout_s)
-            self._go_point(self.AISLE_X, y, tol=0.10, timeout_s=timeout_s)
-        return self._go_pose(x, y, yaw, tol, yaw_tol, timeout_s)
+        """Drive straight to (x, y), then turn to yaw.
 
-    def _go_point(self, x, y, tol, timeout_s):
-        t_end = self.robot.getTime() + timeout_s
-        while self.robot.getTime() < t_end:
-            px, py, pyaw = self.pose()
-            dx, dy = x - px, y - py
-            dist = math.hypot(dx, dy)
-            if dist <= tol:
-                break
-            err = wrap(math.atan2(dy, dx) - pyaw)
-            if abs(err) > 0.25:
-                self._drive(0.0, 1.8 * err)
-            else:
-                self._drive(min(0.18, 0.8 * dist), 2.5 * err)
-            self._tick()
+        Every viewpoint lies in the single open aisle between the two racking
+        rows, so a straight line between any two of them is clear. The earlier
+        reroute via the aisle end existed only for the old multi-row world,
+        where the robot had to avoid driving through a rack."""
+        return self._go_pose(x, y, yaw, tol, yaw_tol, timeout_s)
 
     def _go_pose(self, x, y, yaw, tol, yaw_tol, timeout_s):
         t_end = self.robot.getTime() + timeout_s

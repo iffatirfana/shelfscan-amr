@@ -44,6 +44,9 @@ def load():
         f = lambda k: [float(r[k]) for r in rs]  # noqa: E731
         S[p] = dict(
             n=len(rs),
+            # slots per seed comes from the runs (which read it from
+            # layout.json), never from a literal: it changes with the layout
+            nslots=int(round(st.mean(f("n_slots")))),
             acc=st.mean(f("slot_accuracy")) * 100, acc_sd=st.pstdev(f("slot_accuracy")) * 100,
             unv=st.mean(f("unverified_rate")) * 100, unv_sd=st.pstdev(f("unverified_rate")) * 100,
             fe=st.mean(f("false_empty_rate")) * 100, fe_sd=st.pstdev(f("false_empty_rate")) * 100,
@@ -109,6 +112,7 @@ def chart(S, seeds):
 # --------------------------------------------------------------------------- content
 def content(S, seeds, T):
     v1, v3, v4 = S["V1_fixed"], S["V3_rescan"], S["V4_active"]
+    nslots = v4["nslots"]
     n = len(seeds)
     seedtxt = f"{n} unseen seeds ({seeds[0]}-{seeds[-1]})"
     table = [["Strategy", "Slot accuracy", "UNVERIFIED rate", "False-EMPTY rate",
@@ -167,7 +171,8 @@ def content(S, seeds, T):
                      (IMG / "cam_example.png", "Robot camera frame with detector training labels")],
              bullets=["Differential-drive robot (TurtleBot3-Burger wheel geometry) built from Webots base nodes; "
                       "GPS + IMU for pose, camera at item height.",
-                      "Per seed: 18 slots; P(empty)=0.08, P(misplaced)=0.08, P(blocker)=0.20, P(expected-empty)=0.05.",
+                      f"Per seed: {nslots} slots; P(empty)=0.08, P(misplaced)=0.08, P(blocker)=0.20, "
+                      "P(expected-empty)=0.05.",
                       "Viewpoints per slot: centre (1.0 m), left / right (0.55 m sideways, turned to face the slot), "
                       "close (0.65 m). Each run is a separate Webots process, fast mode, rendering on."]),
         dict(title=f"Results: {seedtxt}, 3 strategies, real Webots runs", kind="results",
@@ -252,6 +257,7 @@ def findings(S, n):
 # --------------------------------------------------------------------------- concept note
 def concept_note(S, seeds, T):
     v1, v3, v4 = S["V1_fixed"], S["V3_rescan"], S["V4_active"]
+    nslots = v4["nslots"]
     F = slot_facts()
     n = len(seeds)
     return [
@@ -301,7 +307,8 @@ def concept_note(S, seeds, T):
               "unit-tested and independent of the simulator."),
         ("h2", "4. Results (real Webots runs)"),
         ("p", f"Evaluation protocol: seeds 1-12 generated the training frames, seeds 13-14 were used only to "
-              f"debug the pipeline, and seeds {seeds[0]}-{seeds[-1]} ({n} warehouses, {n * 18} slots per strategy) "
+              f"debug the pipeline, and seeds {seeds[0]}-{seeds[-1]} ({n} warehouses, "
+              f"{n * nslots} slots per strategy) "
               f"were used only for this evaluation. Each strategy ran as a separate Webots process per seed, with "
               f"the same detector and thresholds. Ground truth from the world file is used only for scoring. "
               f"Mean ± std over seeds:"),

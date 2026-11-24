@@ -49,9 +49,14 @@ def main(runs_dir="results/runs", out_dir="results"):
         by[r["policy"]].append(r)
     # Only seeds where every policy finished, so the comparison is paired.
     common = set.intersection(*({r["seed"] for r in rs} for rs in by.values()))
+    # Slot count comes from the runs (which take it from layout.json), never
+    # from a literal here: it changes with the world layout.
+    ns = sorted({r["n_slots"] for r in runs if r.get("n_slots")})
+    slot_txt = (f"{ns[0]} slots per seed" if len(ns) == 1
+                else f"{ns[0]}-{ns[-1]} slots per seed" if ns else "slot count unknown")
     lines = [
         f"Webots R2025a, {len(common)} unseen seeds ({min(common)}-{max(common)}), "
-        f"18 slots per seed, mean ± std over seeds.\n" if common else "",
+        f"{slot_txt}, mean ± std over seeds.\n" if common else "",
         "| Strategy | Runs | Slot accuracy | UNVERIFIED rate | False-EMPTY rate "
         "| Discrepancies caught | False alarms / run | Audit time (sim s) | Frames / run |",
         "|---|---|---|---|---|---|---|---|---|",
