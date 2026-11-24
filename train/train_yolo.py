@@ -21,6 +21,9 @@ def main():
     ap.add_argument("--device", default=None, help="e.g. cpu or 0")
     ap.add_argument("--weights", default="yolov8n.pt")
     ap.add_argument("--export", action="store_true", help="export TFLite INT8 after training")
+    ap.add_argument("--project", default="runs")
+    ap.add_argument("--name", default="shelfscan",
+                    help="run name under --project; change it to keep an earlier run")
     a = ap.parse_args()
 
     root = Path(a.data).resolve()
@@ -31,8 +34,8 @@ def main():
     from ultralytics import YOLO
     model = YOLO(a.weights)
     model.train(data=str(yaml), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device=a.device,
-                project=str(Path("runs").resolve()), plots=True,
-                name="shelfscan", exist_ok=True,
+                project=str(Path(a.project).resolve()), plots=True,
+                name=a.name, exist_ok=True,
                 # colour/lighting augmentation reduces overfitting to the renderer
                 hsv_h=0.02, hsv_s=0.5, hsv_v=0.5, degrees=3, translate=0.08, scale=0.3,
                 fliplr=0.0)   # no flips: left/right occluder side carries meaning

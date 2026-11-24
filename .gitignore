@@ -7,3 +7,5 @@ __pycache__/
 *.pt
 !models/*.pt
 webots/worlds/.*.wbproj
+/dataset_v2/
+!models_v2/*.pt

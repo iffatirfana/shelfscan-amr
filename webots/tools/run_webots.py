@@ -3,7 +3,12 @@
     python webots/tools/run_webots.py webots/worlds/warehouse.wbt --timeout 600 [--env K=V ...]
 
 Returns Webots' exit code (124 on timeout). Uses WEBOTS_HOME or the default
-Windows install path. Rendering stays on (the camera needs it)."""
+Windows install path.
+
+--no-rendering disables only the main-window rendering; camera devices still
+render offscreen. Verified on seed 101 (V4, models_v2): the run JSON and the
+per-slot CSV are bit-identical with and without it, and it is ~17% faster
+(103 s -> 86 s), so it is safe for batch evaluation."""
 import argparse
 import os
 import shutil
@@ -30,12 +35,18 @@ def main():
     ap.add_argument("--timeout", type=float, default=600)
     ap.add_argument("--env", nargs="*", default=[])
     ap.add_argument("--mode", default="fast")
+    ap.add_argument("--no-rendering", action="store_true",
+                    help="disable main-window rendering; camera devices still "
+                         "render offscreen. Verify on a seed before trusting it.")
     a = ap.parse_args()
     env = dict(os.environ)
     for kv in a.env:
         k, v = kv.split("=", 1)
         env[k] = v
-    cmd = [webots_exe(), "--batch", f"--mode={a.mode}", "--minimize", "--stdout", "--stderr", a.world]
+    cmd = [webots_exe(), "--batch", f"--mode={a.mode}", "--minimize", "--stdout", "--stderr"]
+    if a.no_rendering:
+        cmd.append("--no-rendering")
+    cmd.append(a.world)
     t0 = time.time()
     p = subprocess.Popen(cmd, env=env)
     try:

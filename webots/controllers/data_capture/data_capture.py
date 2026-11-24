@@ -87,6 +87,22 @@ def main():
                     return None
                 return bb
 
+            def in_frame(bb):
+                """Drop boxes cut by the left/right image edge.
+
+                Applied to CARTONS and empty bays only, on purpose. A
+                truncated carton may have its SKU print cut off, so its class
+                is ambiguous and a label would be noise. A blocker is
+                identified by coarse shape, so a truncated one is still
+                unambiguously a blocker - and blockers sit 0.20 m off the bay
+                centre only 0.70 m from the camera, so any blocker 0.45 m or
+                wider ALWAYS overruns the frame at the centre viewpoint.
+                Filtering them too starves the class: it cost 12x the blocker
+                boxes (64 per seed down to 5) when tried, and leaving large
+                unlabelled objects in frame teaches the detector to ignore
+                exactly what the occlusion reasoning depends on."""
+                return bb is not None and bb[0] > 1 and bb[2] < W - 1
+
             boxes, blockers = [], []
             for s in level:
                 if s["occluder"]:
@@ -97,15 +113,15 @@ def main():
                 if s["actual"]:
                     for c, sz in carton_boxes(s):
                         bb = proj(c, sz)
-                        if bb is None or bb[0] <= 1 or bb[2] >= W - 1:
-                            continue                           # cut by image edge
+                        if not in_frame(bb):
+                            continue
                         vis, _ = visibility_and_side(bb, blockers)
                         if vis >= 0.35:
                             boxes.append((s["actual"], bb))
                 else:
                     c, sz = content_box(s, bay)
                     bb = proj(c, sz)
-                    if bb is None or bb[0] <= 1 or bb[2] >= W - 1:
+                    if not in_frame(bb):
                         continue
                     vis, _ = visibility_and_side(bb, blockers)
                     if vis >= 0.7:

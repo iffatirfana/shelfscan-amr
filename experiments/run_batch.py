@@ -39,7 +39,7 @@ def seeds(spec):
     return out
 
 
-def run_one(tag, seed, controller, env_extra, timeout, version):
+def run_one(tag, seed, controller, env_extra, timeout, version, no_render=False):
     lay = make(seed)
     layout = WORLDS / f"_layout_{tag}.json"
     world = WORLDS / f"_run_{tag}.wbt"
@@ -48,13 +48,56 @@ def run_one(tag, seed, controller, env_extra, timeout, version):
     env = [f"SHELFSCAN_LAYOUT={layout}", f"SHELFSCAN_SEED={seed}", f"SHELFSCAN_TAG={tag}"]
     env += [f"{k}={v}" for k, v in env_extra.items()]
     t0 = time.time()
-    p = subprocess.run([sys.executable, str(ROOT / "webots/tools/run_webots.py"), str(world),
-                        "--timeout", str(timeout), "--env", *env],
-                       capture_output=True, text=True)
+    cmd = [sys.executable, str(ROOT / "webots/tools/run_webots.py"), str(world),
+           "--timeout", str(timeout)]
+    if no_render:
+        cmd.append("--no-rendering")
+    cmd += ["--env", *env]
+    p = subprocess.run(cmd, capture_output=True, text=True)
     wall = time.time() - t0
     rc = p.returncode
     print(f"[{tag}] exit={rc} wall={wall:.0f}s", flush=True)
     return dict(tag=tag, seed=seed, exit=rc, wall_s=round(wall, 1), **env_extra)
+
+
+def eval_seedwise(a):
+    """Run seeds one at a time, all strategies of a seed together. Each run
+    writes its own JSON/CSV the moment it finishes, so stopping early leaves
+    every completed seed scored by all three strategies."""
+    res = Path(a.results)
+    res.mkdir(parents=True, exist_ok=True)
+    pols = a.policies.split(",")
+    t_start = time.time()
+    done = []
+    for i, seed in enumerate(seeds(a.seeds), 1):
+        jobs = [(f"{p}_s{seed}", seed, "shelfscan_audit",
+                 {"SHELFSCAN_POLICY": p, "SHELFSCAN_RESULTS": a.results,
+                  "SHELFSCAN_WEIGHTS": a.weights}) for p in pols]
+        t0 = time.time()
+        with ThreadPoolExecutor(len(jobs)) as ex:
+            list(ex.map(lambda j: run_one(*j, a.timeout, a.version,
+                                          a.no_rendering), jobs))
+        for j in jobs:
+            for pth in (WORLDS / f"_run_{j[0]}.wbt", WORLDS / f"_layout_{j[0]}.json",
+                        WORLDS / f"._run_{j[0]}.wbproj"):
+                pth.unlink(missing_ok=True)
+        wall = time.time() - t0
+        done.append(wall)
+        parts = []
+        for p in pols:
+            f = res / f"{p}_seed{seed}.json"
+            if f.exists():
+                d = json.loads(f.read_text())
+                parts.append(f"{p.split('_')[0]} acc={d['slot_accuracy']*100:5.1f}% "
+                             f"unv={d['unverified']:2d} t={d['audit_time_s']:.0f}s")
+            else:
+                parts.append(f"{p.split('_')[0]} FAILED")
+        avg = sum(done) / len(done)
+        left = (len(seeds(a.seeds)) - i) * avg
+        print(f"[seed {seed}] " + " | ".join(parts)
+              + f" | wall={wall:.0f}s avg={avg:.0f}s eta={left/60:.0f}min",
+              flush=True)
+    print(f"all seeds done in {(time.time() - t_start)/60:.1f} min", flush=True)
 
 
 def main():
@@ -65,13 +108,24 @@ def main():
     ap.add_argument("--timeout", type=float, default=900)
     ap.add_argument("--policies", default=",".join(POLICIES))
     ap.add_argument("--results", default=str(ROOT / "results_v2/runs"))
+    ap.add_argument("--out", default=str(ROOT / "dataset_v2"),
+                    help="capture mode: dataset directory")
     ap.add_argument("--version", default="R2025a")
+    ap.add_argument("--weights", default=str(ROOT / "models_v2/shelfscan_yolov8n.pt"))
+    ap.add_argument("--no-rendering", action="store_true")
+    ap.add_argument("--seedwise", action="store_true",
+                    help="eval mode: finish all strategies of one seed before "
+                         "starting the next, so an early stop still leaves a "
+                         "fair like-for-like comparison")
     a = ap.parse_args()
+
+    if a.mode == "eval" and a.seedwise:
+        return eval_seedwise(a)
 
     jobs = []
     for s in seeds(a.seeds):
         if a.mode == "capture":
-            jobs.append((f"cap{s}", s, "data_capture", {}))
+            jobs.append((f"cap{s}", s, "data_capture", {"SHELFSCAN_OUT": a.out}))
         else:
             for pol in a.policies.split(","):
                 jobs.append((f"{pol}_s{s}", s, "shelfscan_audit",
