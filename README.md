@@ -74,6 +74,45 @@ Every number above comes from `results_v2/results.csv`, which is written only by
 audit controller running inside Webots on seeds never used for training.
 `experiments/policy_harness.py` is an abstract logic check; its output is not a result.
 
+## Extension: machine-readable labels (MVP)
+
+A **separate experiment**, not the main result. In a variant world each carton
+carries a QR code or a Code128 barcode instead of the printed SKU pattern, and
+the robot reads it off the camera frame. Codes are matched to slots through the
+map and the robot's pose, never ground truth. A decoded code decides the slot;
+a slot with no readable code stays UNVERIFIED, because in label mode the
+detector's SKU classes are deliberately not trusted — it was trained on printed
+patterns and only guesses once the cartons carry codes.
+
+V4_active, 10 evaluation seeds (101–110), 30 slots each, thresholds unchanged:
+
+| | QR | Code128 |
+|---|---|---|
+| Slot accuracy | 89.0 ± 4.2 % | 85.7 ± 8.7 % |
+| Decided accuracy | 99.6 ± 1.1 % | 99.6 ± 1.3 % |
+| UNVERIFIED | 3.2 ± 1.3 slots/run | 4.2 ± 2.5 slots/run |
+| Decode rate | 87.6 ± 4.4 % (227/259) | 83.9 ± 9.0 % (217/259) |
+| **Wrong payloads** | **0** | **0** |
+| Discrepancies caught | 48/52 | 46/52 |
+| False alarms | 1 | 0 |
+| Audit time | 358.7 ± 55.9 s | 460.7 ± 68.1 s |
+
+Slot accuracy is below the 98.4 % of the printed-pattern world above because a
+carton standing behind a pallet has an unreadable code and there is no SKU
+fallback by design. That figure comes from a different world, a different
+decision path and the full 30-seed evaluation, so the two are **not comparable
+line by line** and are kept in separate tables throughout.
+
+```bash
+python webots/tools/make_world.py --seed 101 --label qr        # or --label barcode
+python experiments/run_batch.py eval --seeds 101-110 --policies V4_active     --seedwise --no-rendering --label qr --results results_qr/runs     --weights <abs path>/models_v2/shelfscan_yolov8n.pt
+python experiments/summarise_labels.py results_qr/runs results_bc/runs
+```
+
+Full write-up, including why Code128 cannot reach 8 px per bar at 640×480:
+[docs/MVP_LABELS.md](docs/MVP_LABELS.md). Needs `qrcode[pil]`, `python-barcode`
+and `zxing-cpp`.
+
 ## Strategies compared
 
 | Name | What it does |

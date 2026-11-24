@@ -126,26 +126,34 @@ above.
 All V4_active, evaluation seeds only, 30 slots per seed, thresholds unchanged
 at 0.60 / 0.70, detector `models_v2` **not** retrained.
 
-### QR, 10 seeds (101–110) — `results_qr/`
+### 10 evaluation seeds (101–110), both label types
 
-| | after the SKU gate | before |
+Sources: `results_qr/runs` and `results_bc/runs`.
+
+| | QR | Code128 |
 |---|---|---|
-| Slot accuracy | 89.0 ± 4.2 % | 89.0 ± 4.7 % |
-| UNVERIFIED | 10.7 ± 4.4 % | 9.0 ± 4.2 % |
-| **Decided accuracy** | **99.6 ± 1.1 %** | 97.8 ± 1.8 % |
-| **False alarms** | **1** | 5 |
-| **Code decode rate** | **87.6 ± 4.4 %** (227/259) | 86.8 ± 5.2 % |
-| **Wrong payloads** | **0** | 0 |
-| Discrepancies caught | 48 / 52 | 47 / 52 |
-| False EMPTY | 1 of 10 runs | 1 of 10 runs |
-| Audit time | 358.7 ± 55.9 sim s | 352.6 ± 52.9 |
+| Slot accuracy | 89.0 ± 4.2 % | 85.7 ± 8.7 % |
+| **Decided accuracy** | **99.6 ± 1.1 %** | **99.6 ± 1.3 %** |
+| UNVERIFIED | 10.7 ± 4.4 % (3.2 ± 1.3 slots/run) | 14.0 ± 8.3 % (4.2 ± 2.5 slots/run) |
+| **Decode rate** | **87.6 ± 4.4 %** (227/259) | **83.9 ± 9.0 %** (217/259) |
+| **Wrong payloads** | **0** | **0** |
+| Discrepancies caught | 48 / 52 | 46 / 52 |
+| False EMPTY | 1 | 1 |
+| False alarms | 1 | 0 |
+| Audit time | 358.7 ± 55.9 sim s | 460.7 ± 68.1 sim s |
 
-Ignoring the detector's SKU classes in label mode costs nothing in slot
-accuracy and cuts false alarms five-fold. The slots it gives up on were ones
-the detector was guessing at; a few of those guesses had been right, which is
-why UNVERIFIED rises by the same order as the false alarms fall.
+QR reads more codes than Code128 (87.6 % vs 83.9 %) and finishes a quarter
+faster, which is what the pixel budget predicts: a QR carries the same
+information in two dimensions and gets 3.7–6.2 px per module, while Code128
+has to spend it all along one axis at 2.0–4.1 px per module. Neither ever
+decoded to the wrong SKU.
 
-Decode rate by carton size class, same 10 seeds:
+Earlier, before the detector's SKU classes were gated out of label mode, QR
+scored the same slot accuracy (89.0 ± 4.7 %) but only 97.8 ± 1.8 % decided
+accuracy with 5 false alarms. Declining to guess costs nothing in accuracy and
+cuts false alarms to one in 300 slots.
+
+Decode rate by carton size class, QR, same 10 seeds:
 
 | small | medium | large | wide_flat | tall |
 |---|---|---|---|---|
@@ -155,42 +163,51 @@ Decode rate by carton size class, same 10 seeds:
 0.45 m carton is the most likely to be clipped by the camera's vertical field
 at close range, which is an occlusion problem, not a legibility one.
 
+### The printed-pattern result, for reference — a DIFFERENT experiment
+
+| | V4, printed patterns (`results_v2`) |
+|---|---|
+| Slot accuracy | 98.4 ± 2.1 % |
+| UNVERIFIED | 1.3 ± 2.0 % |
+| Decided accuracy | 99.8 % |
+| Discrepancies caught | 149 / 152 |
+| Audit time | 284 ± 40 sim s |
+
+This row is deliberately kept in its own table. It comes from a different
+world (cartons carry printed SKU patterns), a different decision path (the
+trained detector classifies the SKU) and the full 30-seed evaluation. It is
+not comparable line by line with the label numbers above.
+
 ### Seed 101, both label types
 
-| | QR | Code128 | plain (`results_v2`) |
-|---|---|---|---|
-| Slot accuracy | 90.0 % | 93.3 % | 96.7 % |
-| UNVERIFIED | 3 | 2 | 1 |
-| **Decided accuracy** | **100.0 %** | **100.0 %** | 100.0 % |
-| **Decode rate** | **87.5 %** (21/24) | **91.7 %** (22/24) | — |
-| **Wrong payloads** | **0** | **0** | — |
-| Discrepancies caught | 2/2 | 2/2 | 2/2 |
-| False EMPTY | 0 | 0 | 0 |
-| **False alarms** | **0** | **0** | 0 |
-| Audit time | 350 s | 431 s | 320 s |
+| | QR | Code128 |
+|---|---|---|
+| Slot accuracy | 90.0 % | 93.3 % |
+| Decided accuracy | 100.0 % | 100.0 % |
+| Decode rate | 87.5 % (21/24) | 91.7 % (22/24) |
+| Wrong payloads | 0 | 0 |
+| UNVERIFIED | 3 | 2 |
+| False alarms | 0 | 0 |
+| Audit time | 350 s | 431 s |
 
-Both label types now decide nothing they cannot read. Every remaining error in
-both runs is the same kind: a slot standing behind a pallet or a carton, left
-UNVERIFIED. Code128 reads one more carton than QR here (22 vs 21) because the
-extra UNVERIFIED slots send V4 on more re-look detours, which is also why its
-audit time is longer.
-
-Before the gate, the Code128 run had decided all 30 slots but called S1-2-2
-MISPLACED on a detector output of `sku_D` at 0.614 confidence against a true
-`sku_A`. That slot is now UNVERIFIED.
+Both label types decline what they cannot read. Every remaining error in both
+runs is the same kind: a slot standing behind a pallet or a carton, left
+UNVERIFIED.
 
 ## What this says, honestly
 
-* **Where a code is read, it is right.** 270 codes read across all the runs
-  above, zero wrong payloads. That is the appeal: no confidence threshold, no
-  confusion between similar printed patterns.
-* **What the robot cannot read, it now declines to guess.** Decided accuracy is
-  99.6 % over 10 QR seeds and 100 % on both seed-101 runs, with one false alarm
-  in 300 slots. The cost is a higher UNVERIFIED rate, which is the intended
-  trade: an UNVERIFIED slot asks for a human look, a false MISPLACED sends one
-  to the wrong aisle.
-* **QR still does not beat the printed pattern on slot accuracy.** 89.0 % over
-  10 seeds against 98.4 % for the detector on the printed-pattern world. The
+* **Where a code is read, it is right.** 444 codes read across the two
+  10-seed evaluations (227 QR, 217 Code128), zero wrong payloads. That is the
+  appeal: no confidence threshold, no confusion between similar printed
+  patterns.
+* **What the robot cannot read, it declines to guess.** Decided accuracy is
+  99.6 % for both label types over 10 seeds, with one false alarm in 600
+  decided slots and none at all for Code128. The cost is a higher UNVERIFIED
+  rate, which is the intended trade: an UNVERIFIED slot asks for a human look,
+  a false MISPLACED sends one to the wrong aisle.
+* **Neither label beats the printed pattern on slot accuracy.** 89.0 % (QR)
+  and 85.7 % (Code128) over 10 seeds, against 98.4 % for the detector on the
+  printed-pattern world — a different experiment, tabled separately above. The
   reason is not the codes: a blocked carton's code cannot be read at all, and
   with the SKU gate in place there is deliberately no fallback. Closing that
   gap means either retraining the detector on code-labelled cartons so the

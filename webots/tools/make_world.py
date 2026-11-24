@@ -245,7 +245,10 @@ def make(seed, p_empty=0.08, p_mis=0.08, p_occ=0.20, p_exp_empty=0.05,
         for i, l in enumerate(range(LEVELS - 1, -1, -1)):
             ks = range(BAYS) if i % 2 == 0 else range(BAYS - 1, -1, -1)
             order += [slot_id(r, l, k) for k in ks]
-    return dict(seed=seed, n_slots=len(slots), label=label,
+    # `label` is added only in label mode, so a plain layout.json is byte for
+    # byte what it was before the label option existed.
+    extra = {"label": label} if label else {}
+    return dict(seed=seed, n_slots=len(slots), **extra,
                 n_sides=SIDES, n_levels=LEVELS, n_bays=BAYS,
                 level_z=list(LEVEL_Z), cam_level_z=list(CAM_LEVEL_Z),
                 lift_positions=list(LIFT_POS),

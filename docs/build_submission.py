@@ -13,6 +13,7 @@ Writes  docs/ShelfScan_deck.pptx     deck + concept note appended as slides
 Every number in the outputs is computed here from those files; none is typed in.
 """
 import csv
+import json
 import statistics as st
 from pathlib import Path
 
@@ -194,6 +195,7 @@ def content(S, seeds, T):
                   "False-EMPTY rate = slots reported EMPTY that were not empty / all non-empty slots. "
                   "Audit time = simulated seconds. Source: results_v2/results.csv."),
         dict(title="What the results show", bullets=findings(S, n)),
+        dict(title="Label reading extension (MVP)", bullets=extension_bullets(S)),
         dict(title="Path to real hardware",
              bullets=["Robot: any ROS 2 differential-drive base (e.g. TurtleBot3-class or a warehouse AMR) "
                       "with wheel odometry + IMU; replace GPS with LiDAR/AMCL localisation on a shelf map.",
@@ -247,6 +249,90 @@ def slot_facts():
                 v4_left_right_label=sum(1 for r in left if r["observed_label"] and r["observed_label"] == r["actual"]))
 
 
+LABEL_RUNS = [("QR", ROOT / "results_qr/runs"),
+              ("Code128", ROOT / "results_bc/runs")]
+
+
+def label_stats():
+    """Mean +- sd per label type from the label-reading MVP runs.
+
+    Same source as docs/MVP_LABELS.md. These runs are a SEPARATE experiment
+    from the headline results: the world carries machine-readable codes on the
+    cartons instead of printed SKU patterns, so the two sets of numbers must
+    never be put in one table."""
+    out = {}
+    for name, d in LABEL_RUNS:
+        rows = [json.loads(f.read_text())
+                for f in sorted(d.glob("V4_active_seed*.json"))]
+        if not rows:
+            continue
+
+        def col(k):
+            return [r[k] for r in rows if r.get(k) is not None]
+
+        def pm(k, scale=1.0, dp=1):
+            v = [x * scale for x in col(k)]
+            if len(v) < 2:
+                return f"{v[0]:.{dp}f}" if v else "-"
+            return f"{st.mean(v):.{dp}f} ± {st.pstdev(v):.{dp}f}"
+
+        seeds = sorted(r["seed"] for r in rows)
+        out[name] = dict(
+            n=len(rows), seeds=seeds, lo=seeds[0], hi=seeds[-1],
+            nslots=rows[0]["n_slots"],
+            acc=pm("slot_accuracy", 100), dec=pm("decided_accuracy", 100),
+            unv=pm("unverified", 1.0), unv_pct=pm("unverified_rate", 100),
+            decode=pm("qr_decode_rate", 100), time=pm("audit_time_s", 1.0, 0),
+            wrong=sum(r.get("qr_wrong_payload", 0) for r in rows),
+            read=sum(r.get("qr_slots_decoded", 0) for r in rows),
+            cartons=sum(r.get("qr_slots_with_carton", 0) for r in rows),
+            caught=sum(r["caught"] for r in rows),
+            real=sum(r["true_discrepancies"] for r in rows),
+            fa=sum(r["false_alarms"] for r in rows),
+            fe=sum(r["false_empty"] for r in rows))
+    return out
+
+
+def extension_bullets(S):
+    """The label-reading extension, stated as its own experiment."""
+    L = label_stats()
+    if not L:
+        return ["(label-reading MVP runs not present)"]
+    q = L.get("QR")
+    b = L.get("Code128")
+    v4 = S["V4_active"]
+    out = [
+        "EXTENSION, NOT THE MAIN RESULT. A separate experiment: the cartons carry a QR code or a "
+        "Code128 barcode instead of the printed SKU pattern, and the robot reads it off the camera "
+        "frame. MVP, simulation only.",
+        f"Codes are matched to slots through the map, not ground truth, and a decoded code decides "
+        f"the slot outright. Across these runs {sum(x['read'] for x in L.values())} codes were read "
+        f"and {sum(x['wrong'] for x in L.values())} decoded to the wrong SKU.",
+    ]
+    for name in ("QR", "Code128"):
+        s = L.get(name)
+        if not s:
+            continue
+        out.append(
+            f"{name}, seeds {s['lo']}-{s['hi']} ({s['n']} seeds, {s['nslots']} slots each, V4): "
+            f"slot accuracy {s['acc']}%, decided accuracy {s['dec']}%, UNVERIFIED {s['unv']} slots "
+            f"per run, decode rate {s['decode']}% ({s['read']}/{s['cartons']} cartons), "
+            f"wrong payloads {s['wrong']}, audit time {s['time']} simulated s.")
+    out += [
+        "Why slot accuracy is lower than the printed-pattern result: a carton standing behind a pallet "
+        "has an unreadable code, and in label mode the detector's SKU classes are deliberately NOT "
+        "trusted (it was trained on printed patterns, so it only guesses once the cartons carry codes). "
+        "Those slots stay UNVERIFIED instead of becoming a wrong MISPLACED.",
+        f"Separate experiment, stated separately: the headline {v4['acc']:.1f}% slot accuracy is from the "
+        f"printed-pattern world with the trained detector. The label numbers above come from a different "
+        f"world and a different decision path and are not comparable line by line.",
+        "What it buys: where a code is read the answer is certain, with no confidence threshold and no "
+        "confusion between similar printed patterns. What it costs: more UNVERIFIED slots and more "
+        "re-look detours. Full write-up and the Code128 pixel-budget analysis: docs/MVP_LABELS.md.",
+    ]
+    return out
+
+
 def findings(S, n):
     v1, v3, v4 = S["V1_fixed"], S["V3_rescan"], S["V4_active"]
     F = slot_facts()
@@ -274,6 +360,35 @@ def findings(S, n):
 
 
 # --------------------------------------------------------------------------- concept note
+def extension_paragraph(S):
+    """One paragraph on the label-reading extension, for the concept note."""
+    L = label_stats()
+    v4 = S["V4_active"]
+    if not L:
+        return "(label-reading MVP runs not present)"
+    parts = []
+    for name in ("QR", "Code128"):
+        s = L.get(name)
+        if s:
+            parts.append(
+                f"{name} {s['acc']}% slot accuracy, {s['dec']}% decided accuracy, "
+                f"{s['unv']} UNVERIFIED slots per run, {s['decode']}% decode rate "
+                f"({s['read']}/{s['cartons']} cartons), {s['wrong']} wrong payloads, "
+                f"{s['time']} simulated s")
+    s = L.get("QR") or next(iter(L.values()))
+    return (
+        "Separately from the result above, the same audit was run in a variant world where each carton "
+        "carries a machine-readable code instead of a printed SKU pattern: a QR code, or a Code128 "
+        "barcode. Codes are matched to slots through the map, not ground truth. Over "
+        f"{s['n']} seeds ({s['lo']}-{s['hi']}, {s['nslots']} slots each, V4): " + "; ".join(parts) + ". "
+        "No code of either type ever decoded to the wrong SKU. Slot accuracy is below the "
+        f"{v4['acc']:.1f}% of the printed-pattern world because a carton behind a pallet has an unreadable "
+        "code, and in label mode the detector's SKU classes are deliberately not trusted, so those slots "
+        "stay UNVERIFIED rather than becoming a wrong MISPLACED. MVP, 10 seeds, simulation only, and a "
+        "different experiment from the headline figure. Details: docs/MVP_LABELS.md."
+    )
+
+
 def concept_note(S, seeds, T):
     v1, v3, v4 = S["V1_fixed"], S["V3_rescan"], S["V4_active"]
     nslots = v4["nslots"]
@@ -373,7 +488,9 @@ def concept_note(S, seeds, T):
               "and more frequent counts than manual cycle counting, and audit coverage that is measured rather "
               "than assumed. The approach is hardware-agnostic: the decision logic transfers unchanged to any "
               "camera-equipped mobile base."),
-        ("h2", "7. Path to reality and limits"),
+        ("h2", "7. Extension: machine-readable labels (MVP)"),
+        ("p", extension_paragraph(S)),
+        ("h2", "8. Path to reality and limits"),
         ("p", "Deployment path: a ROS 2 differential-drive base with LiDAR localisation on a shelf map (replacing "
               "GPS), an RGB camera on a mast, and an edge computer running the INT8-exported YOLOv8n; fine-tune "
               "on real shelf images and pilot on one aisle against a manual count. Current limits: simplified "
@@ -711,7 +828,12 @@ def video_script(S, seeds, T):
          "dependency, so they move to a real robot unchanged. On hardware we would use a ROS 2 differential-drive "
          "base with LiDAR localisation on a shelf map instead of simulator GPS, an RGB camera on a mast at shelf "
          "height, and an edge computer running the detector, exported to INT8. After fine-tuning on real shelf photos, "
-         "the first trial would be one aisle, checked against a manual count. We are honest about the limits: "
+         "the first trial would be one aisle, checked against a manual count. "
+         "As a separate extension we also ran the same audit in a variant world where each carton carries a "
+         "QR code or a Code128 barcode: over ten evaluation seeds the robot read 87.6 percent of QR codes "
+         "and 83.9 percent of barcodes, and not one code of either type ever decoded to the wrong product. "
+         "That is an MVP in simulation, and a different experiment from the headline number. "
+         "We are honest about the limits: "
          "everything here is simulation. The cartons and their labels are rendered, the world is static, "
          "localisation is ideal, the robot's scissor linkage really folds but rides on small TurtleBot3-class running gear, the two decision "
          "thresholds are design defaults rather than tuned values, and nothing has run on a "
