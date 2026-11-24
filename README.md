@@ -91,11 +91,18 @@ V4_active, 10 evaluation seeds (101–110), 30 slots each, thresholds unchanged:
 | Slot accuracy | 89.0 ± 4.2 % | 85.7 ± 8.7 % |
 | Decided accuracy | 99.6 ± 1.1 % | 99.6 ± 1.3 % |
 | UNVERIFIED | 3.2 ± 1.3 slots/run | 4.2 ± 2.5 slots/run |
-| Decode rate | 87.6 ± 4.4 % (227/259) | 83.9 ± 9.0 % (217/259) |
+| Decode rate (mean of 10 per-seed rates) | 87.6 ± 4.4 % | 83.9 ± 9.0 % |
+| Decode rate (pooled over all cartons) | 87.6 % (227/259) | 83.8 % (217/259) |
 | **Wrong payloads** | **0** | **0** |
 | Discrepancies caught | 48/52 | 46/52 |
 | False alarms | 1 | 0 |
 | Audit time | 358.7 ± 55.9 s | 460.7 ± 68.1 s |
+
+The two label types are **not separated** by this evidence: the paired
+per-seed decode difference is +3.7 pp with a 95 % CI of −1.1 to +8.4, and QR
+decoded more on 4 of 10 seeds, fewer on 2 and the same on 4. Code128 has less
+pixel headroom by construction (2.0–4.1 px per module against 3.7–6.2), which
+is consistent with its wider spread, but 10 seeds do not establish a winner.
 
 Slot accuracy is below the 98.4 % of the printed-pattern world above because a
 carton standing behind a pallet has an unreadable code and there is no SKU

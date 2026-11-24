@@ -135,18 +135,33 @@ Sources: `results_qr/runs` and `results_bc/runs`.
 | Slot accuracy | 89.0 ± 4.2 % | 85.7 ± 8.7 % |
 | **Decided accuracy** | **99.6 ± 1.1 %** | **99.6 ± 1.3 %** |
 | UNVERIFIED | 10.7 ± 4.4 % (3.2 ± 1.3 slots/run) | 14.0 ± 8.3 % (4.2 ± 2.5 slots/run) |
-| **Decode rate** | **87.6 ± 4.4 %** (227/259) | **83.9 ± 9.0 %** (217/259) |
+| **Decode rate**, mean of the 10 per-seed rates | **87.6 ± 4.4 %** | **83.9 ± 9.0 %** |
+| **Decode rate**, pooled over all cartons | **87.6 %** (227/259) | **83.8 %** (217/259) |
 | **Wrong payloads** | **0** | **0** |
 | Discrepancies caught | 48 / 52 | 46 / 52 |
 | False EMPTY | 1 | 1 |
 | False alarms | 1 | 0 |
 | Audit time | 358.7 ± 55.9 sim s | 460.7 ± 68.1 sim s |
 
-QR reads more codes than Code128 (87.6 % vs 83.9 %) and finishes a quarter
-faster, which is what the pixel budget predicts: a QR carries the same
-information in two dimensions and gets 3.7–6.2 px per module, while Code128
-has to spend it all along one axis at 2.0–4.1 px per module. Neither ever
-decoded to the wrong SKU.
+Two different decode-rate figures are quoted above and they are not
+interchangeable. The **mean of the per-seed rates** weights every seed equally;
+the **pooled** figure is simply all codes read divided by all cartons present.
+They agree for QR (87.6 % either way) and differ slightly for Code128
+(83.9 % mean vs 83.8 % pooled), because the seeds do not all contain the same
+number of cartons.
+
+**The data does not show that QR beats Code128.** Per seed, QR decoded more on
+4 of 10 seeds, fewer on 2, and exactly the same on 4. The paired difference is
++3.7 percentage points with a 95 % confidence interval of −1.1 to +8.4, which
+includes zero, so on 10 seeds the two are not separated. Code128's spread is
+much wider (sd 9.0 vs 4.4), driven by seed 105 where it read 20/29 against
+QR's 26/29. What the pixel budget does say is that Code128 has far less
+headroom — 2.0–4.1 px per module against the QR's 3.7–6.2 — so it is the more
+fragile of the two, which is consistent with that wider spread but is not
+demonstrated by these 10 seeds. Neither ever decoded to the wrong SKU.
+
+Code128 audits took longer (461 ± 68 s vs 359 ± 56 s), which follows from its
+higher UNVERIFIED rate sending V4 on more re-look detours.
 
 Earlier, before the detector's SKU classes were gated out of label mode, QR
 scored the same slot accuracy (89.0 ± 4.7 %) but only 97.8 ± 1.8 % decided
@@ -184,7 +199,7 @@ not comparable line by line with the label numbers above.
 |---|---|---|
 | Slot accuracy | 90.0 % | 93.3 % |
 | Decided accuracy | 100.0 % | 100.0 % |
-| Decode rate | 87.5 % (21/24) | 91.7 % (22/24) |
+| Decode rate (one seed, pooled) | 87.5 % (21/24) | 91.7 % (22/24) |
 | Wrong payloads | 0 | 0 |
 | UNVERIFIED | 3 | 2 |
 | False alarms | 0 | 0 |
@@ -205,6 +220,11 @@ UNVERIFIED.
   decided slots and none at all for Code128. The cost is a higher UNVERIFIED
   rate, which is the intended trade: an UNVERIFIED slot asks for a human look,
   a false MISPLACED sends one to the wrong aisle.
+* **The two label types are not separated by this evidence.** QR and Code128
+  differ by +3.7 pp of decode rate with a 95 % CI of −1.1 to +8.4; 10 seeds is
+  not enough to call a winner. Code128 is the more fragile by construction
+  (2.0–4.1 px per module against 3.7–6.2), but that is an argument from the
+  pixel budget, not a measured result.
 * **Neither label beats the printed pattern on slot accuracy.** 89.0 % (QR)
   and 85.7 % (Code128) over 10 seeds, against 98.4 % for the detector on the
   printed-pattern world — a different experiment, tabled separately above. The

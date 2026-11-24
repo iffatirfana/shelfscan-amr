@@ -283,6 +283,8 @@ def label_stats():
             acc=pm("slot_accuracy", 100), dec=pm("decided_accuracy", 100),
             unv=pm("unverified", 1.0), unv_pct=pm("unverified_rate", 100),
             decode=pm("qr_decode_rate", 100), time=pm("audit_time_s", 1.0, 0),
+            pooled=100 * sum(r["qr_slots_decoded"] for r in rows)
+            / max(1, sum(r["qr_slots_with_carton"] for r in rows)),
             wrong=sum(r.get("qr_wrong_payload", 0) for r in rows),
             read=sum(r.get("qr_slots_decoded", 0) for r in rows),
             cartons=sum(r.get("qr_slots_with_carton", 0) for r in rows),
@@ -316,7 +318,8 @@ def extension_bullets(S):
         out.append(
             f"{name}, seeds {s['lo']}-{s['hi']} ({s['n']} seeds, {s['nslots']} slots each, V4): "
             f"slot accuracy {s['acc']}%, decided accuracy {s['dec']}%, UNVERIFIED {s['unv']} slots "
-            f"per run, decode rate {s['decode']}% ({s['read']}/{s['cartons']} cartons), "
+            f"per run, decode rate {s['decode']}% as the mean of the per-seed rates and "
+            f"{s['pooled']:.1f}% pooled ({s['read']}/{s['cartons']} cartons), "
             f"wrong payloads {s['wrong']}, audit time {s['time']} simulated s.")
     out += [
         "Why slot accuracy is lower than the printed-pattern result: a carton standing behind a pallet "
@@ -326,6 +329,10 @@ def extension_bullets(S):
         f"Separate experiment, stated separately: the headline {v4['acc']:.1f}% slot accuracy is from the "
         f"printed-pattern world with the trained detector. The label numbers above come from a different "
         f"world and a different decision path and are not comparable line by line.",
+        "The two label types are NOT separated by this evidence: the paired per-seed decode difference "
+        "is +3.7 points with a 95% confidence interval of -1.1 to +8.4, and QR decoded more on 4 of 10 "
+        "seeds, fewer on 2 and the same on 4. Code128 has less pixel headroom by construction, which "
+        "fits its wider spread, but 10 seeds do not establish a winner.",
         "What it buys: where a code is read the answer is certain, with no confidence threshold and no "
         "confusion between similar printed patterns. What it costs: more UNVERIFIED slots and more "
         "re-look detours. Full write-up and the Code128 pixel-budget analysis: docs/MVP_LABELS.md.",
@@ -372,9 +379,8 @@ def extension_paragraph(S):
         if s:
             parts.append(
                 f"{name} {s['acc']}% slot accuracy, {s['dec']}% decided accuracy, "
-                f"{s['unv']} UNVERIFIED slots per run, {s['decode']}% decode rate "
-                f"({s['read']}/{s['cartons']} cartons), {s['wrong']} wrong payloads, "
-                f"{s['time']} simulated s")
+                f"{s['unv']} UNVERIFIED slots per run, {s['pooled']:.1f}% of cartons decoded "
+                f"({s['read']}/{s['cartons']}, pooled), {s['wrong']} wrong payloads")
     s = L.get("QR") or next(iter(L.values()))
     return (
         "Separately from the result above, the same audit was run in a variant world where each carton "
@@ -384,8 +390,9 @@ def extension_paragraph(S):
         "No code of either type ever decoded to the wrong SKU. Slot accuracy is below the "
         f"{v4['acc']:.1f}% of the printed-pattern world because a carton behind a pallet has an unreadable "
         "code, and in label mode the detector's SKU classes are deliberately not trusted, so those slots "
-        "stay UNVERIFIED rather than becoming a wrong MISPLACED. MVP, 10 seeds, simulation only, and a "
-        "different experiment from the headline figure. Details: docs/MVP_LABELS.md."
+        "stay UNVERIFIED rather than becoming a wrong MISPLACED. The two label types are not separated "
+        "by 10 seeds. MVP, simulation only, and a different experiment from the headline figure. "
+        "Details: docs/MVP_LABELS.md."
     )
 
 
