@@ -1,5 +1,5 @@
 scan_index,slot_id,side,level,bay,size_class,expected,actual,blocker,occluder,true_status,final_status,observed_label,confidence,observations,last_viewpoint,qr_text
-0,S0-2-0,A,2,0,tall,sku_A,sku_A,carton,left,OK,MISPLACED,sku_C,0.601,2,right,
+0,S0-2-0,A,2,0,tall,sku_A,sku_A,carton,left,OK,UNVERIFIED,,0.0,4,close,
 1,S0-2-1,A,2,1,tall,,,,,OK,OK,slot_empty,0.97,1,center,
 2,S0-2-2,A,2,2,medium,sku_D,sku_D,,,OK,OK,sku_D,1.0,1,center,SKU=sku_D;INV=INV-108-12
 3,S0-2-3,A,2,3,medium,sku_D,sku_D,carton,right,OK,OK,sku_D,1.0,1,center,SKU=sku_D;INV=INV-108-13

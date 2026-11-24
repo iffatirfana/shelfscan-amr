@@ -22,6 +22,7 @@
  "frames": 44,
  "weights": "D:/ihacks/shelfscan-amr/models_v2/shelfscan_yolov8n.pt",
  "qr": true,
+ "label_type": "qr",
  "qr_slots_decoded": 26,
  "qr_slots_with_carton": 29,
  "qr_decode_rate": 0.896551724137931,

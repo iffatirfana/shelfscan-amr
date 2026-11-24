@@ -4,10 +4,10 @@
  "n_slots": 30,
  "correct": 27,
  "slot_accuracy": 0.9,
- "decided": 28,
- "decided_accuracy": 0.9642857142857143,
- "unverified": 2,
- "unverified_rate": 0.06666666666666667,
+ "decided": 27,
+ "decided_accuracy": 1.0,
+ "unverified": 3,
+ "unverified_rate": 0.1,
  "n_truly_not_empty": 25,
  "false_empty": 0,
  "false_empty_rate": 0.0,
@@ -16,12 +16,13 @@
  "true_discrepancies": 6,
  "caught": 6,
  "detection_rate": 1.0,
- "false_alarms": 1,
- "audit_time_s": 306.08,
- "distance_m": 25.88,
- "frames": 38,
+ "false_alarms": 0,
+ "audit_time_s": 320.96,
+ "distance_m": 27.26,
+ "frames": 40,
  "weights": "D:/ihacks/shelfscan-amr/models_v2/shelfscan_yolov8n.pt",
  "qr": true,
+ "label_type": "qr",
  "qr_slots_decoded": 21,
  "qr_slots_with_carton": 24,
  "qr_decode_rate": 0.875,
@@ -35,13 +36,13 @@
  "per_side": {
   "A": {
    "n_slots": 15,
-   "decided": 15,
-   "time_s": 131.17
+   "decided": 14,
+   "time_s": 146.53
   },
   "B": {
    "n_slots": 15,
    "decided": 13,
-   "time_s": 174.91
+   "time_s": 174.43
   }
  }
 }

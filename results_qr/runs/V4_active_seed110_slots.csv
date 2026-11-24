@@ -6,8 +6,8 @@ scan_index,slot_id,side,level,bay,size_class,expected,actual,blocker,occluder,tr
 4,S0-2-4,A,2,4,large,sku_B,sku_B,pallet,left,OK,UNVERIFIED,,0.0,4,close,
 5,S0-1-4,A,1,4,medium,sku_C,sku_C,,,OK,OK,sku_C,1.0,1,center,SKU=sku_C;INV=INV-110-09
 6,S0-1-3,A,1,3,small,sku_A,sku_A,,,OK,OK,sku_A,1.0,1,center,SKU=sku_A;INV=INV-110-08
-7,S0-1-2,A,1,2,wide_flat,sku_C,sku_C,carton,left,OK,UNVERIFIED,,0.0,4,close,
-8,S0-1-1,A,1,1,medium,sku_B,sku_B,carton,left,OK,MISPLACED,sku_C,0.673,2,right,
+7,S0-1-2,A,1,2,wide_flat,sku_C,sku_C,carton,left,OK,OK,sku_C,1.0,4,close,SKU=sku_C;INV=INV-110-07
+8,S0-1-1,A,1,1,medium,sku_B,sku_B,carton,left,OK,UNVERIFIED,,0.0,4,close,
 9,S0-1-0,A,1,0,tall,sku_C,,,,EMPTY,EMPTY,slot_empty,0.966,1,center,
 10,S0-0-0,A,0,0,wide_flat,sku_D,sku_D,carton,right,OK,OK,sku_D,1.0,1,center,SKU=sku_D;INV=INV-110-00
 11,S0-0-1,A,0,1,small,sku_A,sku_D,,,MISPLACED,MISPLACED,sku_D,1.0,1,center,SKU=sku_D;INV=INV-110-01

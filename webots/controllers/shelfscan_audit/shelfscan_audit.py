@@ -11,9 +11,12 @@ BarcodeDetector decodes EAN/UPC only, not Code128. Each decoded code is matched 
 a slot by projecting that slot's nominal content region into the image and
 testing which region holds the code's centre, so the match uses the map and the
 robot's pose, never ground truth. A matched code decides the slot outright (OK
-if the SKU is the expected one, MISPLACED if not); a slot with no code falls
-back unchanged to the detector and the usual UNVERIFIED rules. The EMPTY rule
-and both thresholds (0.60 / 0.70) are untouched - a QR can never produce EMPTY.
+if the SKU is the expected one, MISPLACED if not). A slot with no readable code
+stays UNVERIFIED: in label mode the detector's SKU classes are ignored, because
+it was trained on printed patterns and only guesses once the cartons carry
+codes. Its slot_empty class is still used, so the EMPTY rule and both
+thresholds (0.60 / 0.70) are untouched, and a code can never produce EMPTY.
+Plain printed-pattern mode is completely unchanged.
 
 Scan order: one shelf side is scanned COMPLETELY - every level from the top
 down, the whole length of each level, including any V4 re-verification detours
@@ -49,7 +52,7 @@ from shelfscan.robot_utils import (CLASSES, Driver, Lift,        # noqa: E402
                                    content_box, load_layout)
 from shelfscan.scissor import ScissorLinks                       # noqa: E402
 from shelfscan.twin import DigitalTwin                           # noqa: E402
-from shelfscan.types import Observation, Status                  # noqa: E402
+from shelfscan.types import EMPTY_CLASS, Observation, Status     # noqa: E402
 
 CONF_MIN = 0.25
 IMGSZ = int(os.environ.get("SHELFSCAN_IMGSZ", "320"))   # must match training
@@ -270,6 +273,16 @@ def main():
             return Observation(sid, sku, 1.0, 1.0, None, vp, robot.getTime())
 
         own = [(b, c, p) for b, c, p in boxes if c != "blocker" and inside(b)]
+        if LABEL:
+            # In label mode the SKU comes from a decoded code or not at all.
+            # models_v2 was trained on printed SKU patterns; once the cartons
+            # carry QR or Code128 instead, its SKU head is guessing, and a
+            # guess over 0.60 turns a blocked slot into a false MISPLACED
+            # (seed 101, Code128: S1-2-2 called sku_D at 0.614 against a true
+            # sku_A). slot_empty is a judgement about shape, not about print,
+            # so it is kept and the EMPTY rule and both thresholds are
+            # untouched. A slot with no readable code now stays UNVERIFIED.
+            own = [(b, c, p) for b, c, p in own if c == EMPTY_CLASS]
         label, conf = (None, 0.0)
         if own:
             _, label, conf = max(own, key=lambda t: t[2])
