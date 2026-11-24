@@ -1,0 +1,56 @@
+Learned next-best-view picker (V5) - MVP, simulation only
+
+table            : D:\ihacks\shelfscan-amr\results_ml\nbv_train.csv
+seeds in table   : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+trained on       : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] (249 candidate rows, 113 decisions)
+held out (dev)   : [13, 14] (42 candidate rows, 19 decisions)
+evaluation seeds 101-130: never used for training (asserted)
+
+model            : DecisionTreeClassifier(max_depth=6, class_weight='balanced')
+positive rate    : 0.454 of rows are V4's choice
+
+top-1 agreement with V4, train : 107/113 (94.7%)
+top-1 agreement with V4, dev   : 18/19 (94.7%)
+
+feature importances:
+  cand_close       0.399
+  try_index        0.279
+  occ_right        0.125
+  occ_left         0.122
+  travel_m         0.030
+  visibility       0.020
+  cand_right       0.016
+  level_change     0.008
+
+tree:
+|--- try_index <= 2.50
+|   |--- cand_close <= 0.50
+|   |   |--- try_index <= 1.50
+|   |   |   |--- travel_m <= 1.20
+|   |   |   |   |--- cand_right <= 0.50
+|   |   |   |   |   |--- occ_left <= 0.50
+|   |   |   |   |   |   |--- class: 1
+|   |   |   |   |   |--- occ_left >  0.50
+|   |   |   |   |   |   |--- class: 0
+|   |   |   |   |--- cand_right >  0.50
+|   |   |   |   |   |--- occ_right <= 0.50
+|   |   |   |   |   |   |--- class: 1
+|   |   |   |   |   |--- occ_right >  0.50
+|   |   |   |   |   |   |--- class: 0
+|   |   |   |--- travel_m >  1.20
+|   |   |   |   |--- travel_m <= 1.54
+|   |   |   |   |   |--- level_change <= 0.50
+|   |   |   |   |   |   |--- class: 1
+|   |   |   |   |   |--- level_change >  0.50
+|   |   |   |   |   |   |--- class: 1
+|   |   |   |   |--- travel_m >  1.54
+|   |   |   |   |   |--- visibility <= 0.66
+|   |   |   |   |   |   |--- class: 1
+|   |   |   |   |   |--- visibility >  0.66
+|   |   |   |   |   |   |--- class: 0
+|   |   |--- try_index >  1.50
+|   |   |   |--- class: 1
+|   |--- cand_close >  0.50
+|   |   |--- class: 0
+|--- try_index >  2.50
+|   |--- class: 1

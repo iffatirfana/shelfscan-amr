@@ -29,11 +29,18 @@ derived from the bay geometry only - never from the true carton size, which is
 ground truth. Slot CONTENT comes only from the detector. Ground truth in
 layout.json is used only to score the result.
 
+SHELFSCAN_NBV_LOG=<path> (dev only, MVP) additionally writes one CSV row per
+CANDIDATE viewpoint at every next-best-view decision, with the features a
+learned picker could use and whether V4 chose that candidate. The hook runs
+after choose_viewpoint has already returned, so logging cannot change what V4
+does - verified by re-running seed 101 against results_v2.
+
 Targets Webots R2025a (Windows). Writes <policy>_seed<N>.json and
 <policy>_seed<N>_slots.csv to SHELFSCAN_RESULTS.
 """
 import csv
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -182,6 +189,51 @@ def main():
     order = layout["order"]
     sides = list(dict.fromkeys(slots[sid]["rack"] for sid in order))
 
+    # ---- next-best-view decision logging (dev only) -----------------------
+    nbv_path = os.environ.get("SHELFSCAN_NBV_LOG")
+    nbv_rows = []
+    last_level = {"v": None}
+
+    def cand_rows(rec, tried, cands):
+        """One dict per candidate viewpoint: the features of this decision.
+
+        The single place candidate features are built, so what V5 scores at
+        run time is exactly what the table was trained on."""
+        s = slots[rec.slot_id]
+        px, py, _ = drv.pose()
+        out = []
+        for vp in cands:
+            vx, vy, _ = s["viewpoints"][vp]
+            out.append(dict(
+                seed=layout["seed"], slot_id=rec.slot_id, candidate=vp,
+                n_tried=len(tried), try_index=rec.n_observations,
+                uncertainty=round(1.0 - rec.confidence, 4),
+                blocker_present=int(rec.last_occluder_side is not None),
+                occluder_side=rec.last_occluder_side or "none",
+                visibility=round(rec.last_visibility, 4),
+                travel_m=round(math.hypot(vx - px, vy - py), 4),
+                level=s["level"],
+                level_change=int(last_level["v"] is not None
+                                 and last_level["v"] != s["level"]),
+                side=s["rack"], bay=s["bay"]))
+        return out
+
+    def log_decision(rec, tried, cands, chosen):
+        for r in cand_rows(rec, tried, cands):
+            r["chosen"] = int(r["candidate"] == chosen)
+            nbv_rows.append(r)
+
+    # ---- learned picker (V5) ---------------------------------------------
+    nbv_model = os.environ.get("SHELFSCAN_NBV_MODEL")
+    picker = None
+    if nbv_model and policy == "V5_learned":
+        from shelfscan.nbv_model import NBVPicker
+        picker = NBVPicker(nbv_model)
+        print(f"V5: loaded next-best-view model {nbv_model}", flush=True)
+
+    def pick_viewpoint(rec, tried, cands):
+        return picker.pick(cand_rows(rec, tried, cands)) if picker else None
+
     def ids_of(side, level=None):
         return [sid for sid in order if slots[sid]["rack"] == side
                 and (level is None or slots[sid]["level"] == level)]
@@ -209,6 +261,7 @@ def main():
             finish_level(current["key"])
             current["key"] = key
         x, y, yaw = s["viewpoints"][vp]
+        last_level["v"] = s["level"]
         lift.request(s["lift"])          # lift travels while the base drives
         drv.go_to(x, y, yaw)
         lift.settle(s["cam_z"])
@@ -303,7 +356,13 @@ def main():
         t_side = robot.getTime()
         print(f"Side {side} started: {len(ids)} slots, levels {lv} top down",
               flush=True)
-        POLICIES[policy](twin, observe, ids)
+        if policy == "V5_learned":
+            POLICIES[policy](twin, observe, ids, picker=pick_viewpoint,
+                             on_decision=log_decision if nbv_path else None)
+        elif nbv_path and policy == "V4_active":
+            POLICIES[policy](twin, observe, ids, on_decision=log_decision)
+        else:
+            POLICIES[policy](twin, observe, ids)
         for level in lv:
             finish_level((side, level))
         dec = n_decided(ids)
@@ -346,6 +405,9 @@ def main():
                false_alarms=false_alarms,
                audit_time_s=round(elapsed, 2), distance_m=round(drv.distance, 2),
                frames=n_frames, weights=str(weights),
+               nbv_model=(str(nbv_model) if picker else None),
+               nbv_calls=(picker.n_calls if picker else 0),
+               nbv_fallbacks=(picker.n_fallback if picker else 0),
                qr=bool(LABEL), label_type=LABEL or None,
                qr_slots_decoded=len(qr_read),
                qr_slots_with_carton=len(qr_with_carton),
@@ -373,6 +435,17 @@ def main():
                         r.observed_label or "", round(r.confidence, 3),
                         r.n_observations, r.last_viewpoint,
                         qr_read.get(sid, "")])
+    if nbv_path and nbv_rows:
+        f = Path(nbv_path)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        new = not f.exists()
+        with open(f, "a", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(nbv_rows[0]))
+            if new:
+                w.writeheader()
+            w.writerows(nbv_rows)
+        print(f"nbv: wrote {len(nbv_rows)} candidate rows to {f}", flush=True)
+
     print(json.dumps(out))
     robot.simulationQuit(0)
 

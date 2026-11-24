@@ -74,7 +74,9 @@ def eval_seedwise(a):
         jobs = [(f"{p}_s{seed}", seed, "shelfscan_audit",
                  {"SHELFSCAN_POLICY": p, "SHELFSCAN_RESULTS": a.results,
                   "SHELFSCAN_WEIGHTS": a.weights,
-                  "SHELFSCAN_LABEL": a.label or ""}) for p in pols]
+                  "SHELFSCAN_LABEL": a.label or "",
+                  "SHELFSCAN_NBV_LOG": a.nbv_log or "",
+                  "SHELFSCAN_NBV_MODEL": a.nbv_model or ""}) for p in pols]
         t0 = time.time()
         with ThreadPoolExecutor(len(jobs)) as ex:
             list(ex.map(lambda j: run_one(*j, a.timeout, a.version,
@@ -119,6 +121,10 @@ def main():
                     help="MVP: build the world with machine-readable carton "
                          "labels and let the audit read them")
     ap.add_argument("--qr", action="store_true", help="shorthand for --label qr")
+    ap.add_argument("--nbv-model", default=None,
+                    help="V5: joblib next-best-view model to score candidates")
+    ap.add_argument("--nbv-log", default=None,
+                    help="dev: append next-best-view candidate rows to this CSV")
     ap.add_argument("--seedwise", action="store_true",
                     help="eval mode: finish all strategies of one seed before "
                          "starting the next, so an early stop still leaves a "
