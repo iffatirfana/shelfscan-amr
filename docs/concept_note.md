@@ -18,33 +18,33 @@ We compare three strategies with identical perception: V1 fixed patrol (one look
 
 ## 3. System architecture
 
-Simulation: Webots R2025a. Each seed generates a warehouse with 3 shelf rows x 6 slots, random SKUs (four coloured product types), gaps, misplaced items and grey blocking objects in front of about 20% of slots. The robot is a differential-drive base with TurtleBot3-Burger wheel geometry, GPS and IMU for pose, and a 640x480 camera on a mast at item height. The world uses only Webots base nodes, so it loads offline.
+Simulation: Webots R2025a. Each seed generates a narrow aisle between two facing racking rows, 3 levels of 5 bays on each side, holding plain cardboard cartons in five size classes, with gaps, misplaced items and blocking objects in front of about 20% of slots. There is no colour cue: a carton's SKU is carried only by a large black-and-white pattern printed on a white shipping label, and a blocker is an unlabelled carton or a pallet stood at the bay mouth, so the detector must work from shape and print rather than colour. The robot is a scissor-lift AMR with differential drive (TurtleBot3-Burger wheel geometry), GPS and IMU for pose, and a 640x480 camera on a powered lift that rises to each shelf level. The world uses only Webots base nodes, so it loads offline.
 
-Perception: a YOLOv8n detector (6 classes: 4 SKUs, slot_empty, blocker) fine-tuned on 864 camera frames captured automatically in Webots from 12 training seeds, with labels projected from simulator geometry and checked visually. Validation: mAP50 0.991, mAP50-95 0.952 (15 epochs, CPU, 320 px).
+Perception: a YOLOv8n detector (6 classes: 4 SKUs, slot_empty, blocker) fine-tuned on 1419 camera frames captured automatically in Webots from 12 training seeds, with labels projected from simulator geometry and checked visually. Validation: mAP50 0.986, mAP50-95 0.938 (30 epochs, CPU, 320 px).
 
-Reasoning and control: slot regions are found by projecting the known shelf map with the robot pose; slot content comes only from the detector. A reasoning module applies the confidence and visibility gates; the digital twin aggregates observations; a policy module (V1/V3/V4) and a next-best-view selector decide where to look; a go-to-pose controller drives the robot, routing between aisles via the aisle end. The reasoning, twin, policy and viewpoint code is pure Python, unit-tested and independent of the simulator.
+Reasoning and control: slot regions are found by projecting the known shelf map with the robot pose; slot content comes only from the detector. A reasoning module applies the confidence and visibility gates; the digital twin aggregates observations; a policy module (V1/V3/V4) and a next-best-view selector decide where to look; a go-to-pose controller drives the robot, routing straight to each viewpoint along the open aisle. The audit finishes one shelf side entirely, top level down, before crossing to the other side. The reasoning, twin, policy and viewpoint code is pure Python, unit-tested and independent of the simulator.
 
 ## 4. Results (real Webots runs)
 
-Evaluation protocol: seeds 1-12 generated the training frames, seeds 13-14 were used only to debug the pipeline, and seeds 101-130 (30 warehouses, 540 slots per strategy) were used only for this evaluation. Each strategy ran as a separate Webots process per seed, with the same detector and thresholds. Ground truth from the world file is used only for scoring. Mean ± std over seeds:
+Evaluation protocol: seeds 1-12 generated the training frames, seeds 13-14 were used only to debug the pipeline, and seeds 101-130 (30 warehouses, 900 slots per strategy) were used only for this evaluation. Each strategy ran as a separate Webots process per seed, with the same detector and thresholds. Ground truth from the world file is used only for scoring. Mean ± std over seeds:
 
-Webots R2025a, 30 unseen seeds (101-130), 18 slots per seed, mean ± std over seeds.
+Webots R2025a, 30 unseen seeds (101-130), 30 slots per seed, mean ± std over seeds.
 
 | Strategy | Runs | Slot accuracy | UNVERIFIED rate | False-EMPTY rate | Discrepancies caught | False alarms / run | Audit time (sim s) | Frames / run |
 |---|---|---|---|---|---|---|---|---|
-| Fixed patrol (V1) | 30 | 80.7 ± 9.0% | 19.3 ± 9.0% | 0.0 ± 0.0% | 69/88 | 0.00 ± 0.00 | 206 ± 0 | 18.0 ± 0.0 |
-| Same-position rescan (V3) | 30 | 80.7 ± 9.0% | 19.3 ± 9.0% | 0.0 ± 0.0% | 69/88 | 0.00 ± 0.00 | 343 ± 45 | 21.5 ± 1.6 |
-| Active verification (V4) | 30 | 98.5 ± 3.5% | 1.5 ± 3.5% | 0.0 ± 0.0% | 86/88 | 0.00 ± 0.00 | 354 ± 56 | 22.0 ± 2.5 |
+| Fixed patrol (V1) | 30 | 89.0 ± 5.7% | 10.9 ± 5.4% | 0.1 ± 0.6% | 134/152 | 0.03 ± 0.18 | 223 ± 0 | 30.0 ± 0.0 |
+| Same-position rescan (V3) | 30 | 89.0 ± 5.7% | 10.8 ± 5.5% | 0.2 ± 0.9% | 134/152 | 0.07 ± 0.25 | 254 ± 21 | 33.3 ± 1.6 |
+| Active verification (V4) | 30 | 98.4 ± 2.1% | 1.3 ± 2.0% | 0.1 ± 0.6% | 149/152 | 0.07 ± 0.25 | 284 ± 40 | 36.2 ± 3.5 |
 
-Slot accuracy counts UNVERIFIED as wrong. Active verification reached 98.5% slot accuracy with 1.5% UNVERIFIED, against 80.7% and 19.3% for the fixed patrol and 80.7% and 19.3% for same-position rescan. The cost is audit time: 354 s versus 206 s simulated. False EMPTY reports: 0, 0 and 0 respectively.
+Slot accuracy counts UNVERIFIED as wrong. Active verification reached 98.4% slot accuracy with 1.3% UNVERIFIED, against 89.0% and 10.9% for the fixed patrol and 89.0% and 10.8% for same-position rescan. The cost is audit time: 284 s versus 223 s simulated. False EMPTY reports: 1, 2 and 1 respectively.
 
 ## 5. What we learned
 
-Looking again only helps from a different place. Same-position rescan gave the same final status as the fixed patrol on 540 of 540 slots while adding 137 s per audit: in a static scene the same viewpoint returns the same image. Active verification spent a similar amount of extra time (148 s) but chose viewpoints on the far side of the blocker, and resolved most of the slots the patrol could not.
+Looking again only helps from a different place. Same-position rescan gave the same final status as the fixed patrol on 899 of 900 slots while adding 31 s per audit: in a static scene the same viewpoint returns the same image. Active verification spent a similar amount of extra time (62 s) but chose viewpoints on the far side of the blocker, and resolved most of the slots the patrol could not.
 
-The conservative rule did not cost correctness. No strategy produced a false EMPTY or a false alarm, and every slot that received a decision was correct (100% decided accuracy for all three). The remaining errors are explicit UNVERIFIED slots, which a human can check. Active verification identified 86 of 88 real discrepancies, against 69 for the fixed patrol.
+The conservative rule kept wrong decisions rare, but not absent. Across 900 slot decisions per strategy there were 1, 2 and 1 false EMPTY reports out of 835 non-empty slots, and decided accuracy was 99.9%, 99.8% and 99.8% respectively. The great majority of remaining errors are explicit UNVERIFIED slots, which a human can check, rather than confident wrong answers. Active verification identified 149 of 152 real discrepancies, against 134 for the fixed patrol.
 
-Where it still fails: 8 slots stayed UNVERIFIED (8 after all four viewpoints, 8 behind blockers). In 6 of them the detector already had the right label, but the 0.70 visibility gate held the decision back; tuning this gate on validation data is the obvious next step. During development we also found that the side viewpoints first faced straight ahead, which put the slot at the image edge so that re-looks never helped; aiming them at the slot, recapturing data and retraining fixed this before the evaluation above.
+Where it still fails: 12 slots stayed UNVERIFIED (12 after all four viewpoints, 12 behind blockers). In 6 of them the detector already had the right label, but the 0.70 visibility gate held the decision back; tuning this gate on validation data is the obvious next step. Two of the 152 discrepancies were also decided wrongly rather than left open. During development we found that blockers were briefly excluded from the training labels by the image-edge filter that drops truncated cartons; because a blocker sits close to the camera and off the bay centre, almost every one is truncated, so the filter cost 12x the blocker boxes. A truncated carton has an ambiguous SKU and a truncated blocker does not, so the two classes are deliberately filtered differently.
 
 ## 6. Expected impact
 
@@ -52,4 +52,4 @@ An audit robot is only useful if its reports can be acted on without re-checking
 
 ## 7. Path to reality and limits
 
-Deployment path: a ROS 2 differential-drive base with LiDAR localisation on a shelf map (replacing GPS), an RGB camera on a mast, and an edge computer running the INT8-exported YOLOv8n; fine-tune on real shelf images and pilot on one aisle against a manual count. Current limits: simplified scene (coloured boxes, one shelf level, static world, ideal pose), thresholds not yet tuned on validation data, few truly empty slots in evaluation, and no hardware measurements yet.
+Deployment path: a ROS 2 differential-drive base with LiDAR localisation on a shelf map (replacing GPS), an RGB camera on a mast, and an edge computer running the INT8-exported YOLOv8n; fine-tune on real shelf images and pilot on one aisle against a manual count. Current limits: simplified scene (rendered cartons with flat printed labels, static world, ideal pose, and a scissor-lift look-alike on small running gear), thresholds not yet tuned on validation data, few truly empty slots in evaluation, and no hardware measurements yet.

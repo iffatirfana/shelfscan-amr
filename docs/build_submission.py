@@ -2,9 +2,9 @@
 
     python docs/build_submission.py
 
-Reads   results/results.csv          (Webots audit runs, one row per run)
-        runs/shelfscan/results.csv   (YOLO training log)
-        dataset/                     (captured training frames, for counts)
+Reads   results_v2/results.csv       (Webots audit runs, one row per run)
+        models_v2/train_results.csv  (YOLO training log)
+        dataset_v2/                  (captured training frames, for counts)
         docs/img/*.png               (frames rendered in Webots)
 Writes  docs/ShelfScan_deck.pptx     deck + concept note appended as slides
         docs/ShelfScan_submission.pdf  deck (16:9 pages) + concept note (A4 pages)
@@ -35,7 +35,7 @@ NAVY, TEAL, INK, MUTED, LIGHT = "#12263A", "#0F7C6E", "#1F2328", "#5B6470", "#EE
 # --------------------------------------------------------------------------- data
 def load():
     import os
-    rows = list(csv.DictReader(open(os.environ.get("SHELFSCAN_RESULTS_CSV", ROOT / "results/results.csv"))))
+    rows = list(csv.DictReader(open(os.environ.get("SHELFSCAN_RESULTS_CSV", ROOT / "results_v2/results.csv"))))
     by = {p: [r for r in rows if r["policy"] == p] for p in POL}
     common = set.intersection(*({int(r["seed"]) for r in by[p]} for p in POL))
     S = {}
@@ -59,13 +59,13 @@ def load():
             empty_caught=int(sum(f("empty_caught"))), empty_n=int(sum(f("n_truly_empty"))),
         )
     seeds = sorted(common)
-    tr = list(csv.DictReader(open(ROOT / "models/train_results.csv")))
+    tr = list(csv.DictReader(open(ROOT / "models_v2/train_results.csv")))
     tr = [{k.strip(): v for k, v in r.items()} for r in tr]
     best = max(tr, key=lambda r: float(r["metrics/mAP50-95(B)"]))
     T = dict(epochs=len(tr), map50=float(best["metrics/mAP50(B)"]),
              map=float(best["metrics/mAP50-95(B)"]),
-             n_train=len(list((ROOT / "dataset/images/train").glob("*.jpg"))),
-             n_val=len(list((ROOT / "dataset/images/val").glob("*.jpg"))))
+             n_train=len(list((ROOT / "dataset_v2/images/train").glob("*.jpg"))),
+             n_val=len(list((ROOT / "dataset_v2/images/val").glob("*.jpg"))))
     return S, seeds, T
 
 
@@ -166,20 +166,28 @@ def content(S, seeds, T):
                       f"Seeds 1-12 for training data, 13-14 for debugging only, {seedtxt} for evaluation only "
                       "(never seen in training or debugging)."]),
         dict(title="Simulation setup (Webots R2025a)", kind="images",
-             images=[(IMG / "sim_overview.png", "3 shelf rows x 6 slots, random SKUs, gaps, misplacements "
-                      "and grey blockers per seed"),
+             images=[(IMG / "sim_overview.png", "Two facing racking rows across one narrow aisle, "
+                      "3 levels x 5 bays each, cardboard cartons of varying size per seed"),
                      (IMG / "cam_example.png", "Robot camera frame with detector training labels")],
-             bullets=["Differential-drive robot (TurtleBot3-Burger wheel geometry) built from Webots base nodes; "
-                      "GPS + IMU for pose, camera at item height.",
+             bullets=["Scissor-lift AMR built from Webots base nodes: differential drive (TurtleBot3-Burger "
+                      "wheel geometry), GPS + IMU for pose, and a 640x480 camera on a powered lift that "
+                      "rises to each shelf level (0.56 / 1.21 / 1.86 m).",
+                      "Contents are plain cardboard cartons in five size classes. There is NO colour cue: the "
+                      "SKU is carried only by a large black-and-white pattern on a white shipping label "
+                      "(square / horizontal bars / dot grid / vertical bars). A blocker is an unlabelled "
+                      "carton or a pallet stood at the bay mouth; an empty slot is a bare bay.",
                       f"Per seed: {nslots} slots; P(empty)=0.08, P(misplaced)=0.08, P(blocker)=0.20, "
                       "P(expected-empty)=0.05.",
-                      "Viewpoints per slot: centre (1.0 m), left / right (0.55 m sideways, turned to face the slot), "
-                      "close (0.65 m). Each run is a separate Webots process, fast mode, rendering on."]),
+                      "Viewpoints per slot: centre (0.90 m from the carton face), left / right (0.45 m "
+                      "sideways, turned to face the slot), close (0.65 m). The audit completes one shelf "
+                      "side entirely, top level down, before crossing to the other side.",
+                      "Each run is a separate Webots process in fast mode with main-window rendering off; "
+                      "that was verified to give bit-identical results and is 17% faster."]),
         dict(title=f"Results: {seedtxt}, 3 strategies, real Webots runs", kind="results",
              table=table, image=IMG / "results_chart.png",
              note="Slot accuracy = final status equals ground truth (UNVERIFIED counts as wrong). "
                   "False-EMPTY rate = slots reported EMPTY that were not empty / all non-empty slots. "
-                  "Audit time = simulated seconds. Source: results/results.csv."),
+                  "Audit time = simulated seconds. Source: results_v2/results.csv."),
         dict(title="What the results show", bullets=findings(S, n)),
         dict(title="Path to real hardware",
              bullets=["Robot: any ROS 2 differential-drive base (e.g. TurtleBot3-class or a warehouse AMR) "
@@ -197,10 +205,14 @@ def content(S, seeds, T):
                       "evidence of absence; uncertainty drives where the robot looks next.",
                       "Innovation: the same policy code runs in unit tests and in Webots; every reported number "
                       "is from a Webots run on unseen seeds.",
-                      "Found in testing: side viewpoints first faced straight ahead, so the slot fell at the image "
-                      "edge and re-looks never helped; fixed by aiming them at the slot, then data recaptured and "
-                      "detector retrained.",
-                      "Limit: simple scene (coloured boxes as SKUs, one shelf level, static world, perfect GPS).",
+                      "Found in testing: blockers were briefly dropped from training labels by the same "
+                      "image-edge filter that (correctly) drops truncated cartons. A blocker sits 0.20 m off "
+                      "the bay centre only 0.70 m from the camera, so any blocker 0.45 m or wider always "
+                      "overruns the frame; filtering them cost 12x the blocker boxes. A truncated carton has "
+                      "an ambiguous SKU, a truncated blocker does not, so the asymmetry is deliberate.",
+                      "Limit: simulation only. Simplified scene (rendered cartons, flat printed labels, "
+                      "static world, perfect GPS pose) and a scissor-lift look-alike on small running gear; "
+                      "nothing has run on a physical robot.",
                       "Limit: decision thresholds (0.60 conf / 0.70 visibility) are design defaults, not tuned "
                       "on validation data.",
                       f"Limit: slot_empty is the rarest training class; only {S['V4_active']['empty_n']} truly "
@@ -208,14 +220,14 @@ def content(S, seeds, T):
                       "Limit: no real-robot test yet; latency and energy on edge hardware not measured."]),
         dict(kind="title", title="Links",
              sub=f"Demo video: {VIDEO_URL}\nCode: {GITHUB_URL}",
-             foot="Reproduce: README.md -> 'How to run'. All numbers: results/results.csv"),
+             foot="Reproduce: README.md -> 'How to run'. All numbers: results_v2/results.csv"),
     ]
     return slides
 
 
 def slot_facts():
-    """Per-slot facts from results/runs/*_slots.csv (written by the Webots controller)."""
-    runs = ROOT / "results/runs"
+    """Per-slot facts from results_v2/runs/*_slots.csv (written by the Webots controller)."""
+    runs = ROOT / "results_v2/runs"
     diff = total = 0
     for f in sorted(runs.glob("V1_fixed_seed*_slots.csv")):
         a = list(csv.DictReader(open(f)))
@@ -236,12 +248,14 @@ def findings(S, n):
     out = [
         f"Active verification raised slot accuracy from {v1['acc']:.1f}% (fixed patrol) to {v4['acc']:.1f}% "
         f"and cut UNVERIFIED slots from {v1['unv']:.1f}% to {v4['unv']:.1f}% (mean over {n} unseen seeds).",
-        f"Same-position rescan changed nothing: its final status equals the fixed patrol on "
-        f"{F['v1v3_total'] - F['v1v3_diff']}/{F['v1v3_total']} slots. In a static, deterministic scene the same "
-        f"viewpoint gives the same image; only a new viewpoint adds information.",
-        f"No false EMPTY reports and no false alarms in any strategy ({v4['fe_n']} false EMPTY out of "
-        f"{v4['not_empty_n']} non-empty slots); every decided slot was correct "
-        f"({v1['dec_acc']:.0f}% / {v3['dec_acc']:.0f}% / {v4['dec_acc']:.0f}% decided accuracy). All errors are honest UNVERIFIED.",
+        f"Same-position rescan bought nothing: it reached the same slot accuracy and the same "
+        f"{v3['caught']}/{v3['real']} discrepancies as a single patrol, and its final status matches the "
+        f"fixed patrol on {F['v1v3_total'] - F['v1v3_diff']}/{F['v1v3_total']} slots. In a static scene the "
+        f"same viewpoint returns the same image; only a new viewpoint adds information.",
+        f"The conservative EMPTY rule kept wrong decisions rare but not zero: false EMPTY "
+        f"{v1['fe_n']} / {v3['fe_n']} / {v4['fe_n']} out of {v4['not_empty_n']} non-empty slots, and "
+        f"decided accuracy {v1['dec_acc']:.1f}% / {v3['dec_acc']:.1f}% / {v4['dec_acc']:.1f}%. "
+        f"Almost every error is an honest UNVERIFIED rather than a wrong answer.",
         f"Real discrepancies (missing or misplaced) identified: {v1['caught']}/{v1['real']} fixed, "
         f"{v3['caught']}/{v3['real']} rescan, {v4['caught']}/{v4['real']} active.",
         f"Cost: audit time {v1['time']:.0f} / {v3['time']:.0f} / {v4['time']:.0f} simulated s; "
@@ -290,10 +304,14 @@ def concept_note(S, seeds, T):
               "V3 same-position rescan (one more look from the same viewpoint for unresolved slots), and V4 "
               "active verification (new viewpoints chosen from the evidence)."),
         ("h2", "3. System architecture"),
-        ("p", "Simulation: Webots R2025a. Each seed generates a warehouse with 3 shelf rows x 6 slots, random "
-              "SKUs (four coloured product types), gaps, misplaced items and grey blocking objects in front of "
-              "about 20% of slots. The robot is a differential-drive base with TurtleBot3-Burger wheel geometry, "
-              "GPS and IMU for pose, and a 640x480 camera on a mast at item height. The world uses only Webots "
+        ("p", "Simulation: Webots R2025a. Each seed generates a narrow aisle between two facing racking rows, "
+              "3 levels of 5 bays on each side, holding plain cardboard cartons in five size classes, with "
+              "gaps, misplaced items and blocking objects in front of about 20% of slots. There is no colour "
+              "cue: a carton's SKU is carried only by a large black-and-white pattern printed on a white "
+              "shipping label, and a blocker is an unlabelled carton or a pallet stood at the bay mouth, so "
+              "the detector must work from shape and print rather than colour. The robot is a scissor-lift "
+              "AMR with differential drive (TurtleBot3-Burger wheel geometry), GPS and IMU for pose, and a "
+              "640x480 camera on a powered lift that rises to each shelf level. The world uses only Webots "
               "base nodes, so it loads offline."),
         ("p", f"Perception: a YOLOv8n detector (6 classes: 4 SKUs, slot_empty, blocker) fine-tuned on "
               f"{T['n_train'] + T['n_val']} camera frames captured automatically in Webots from 12 training "
@@ -303,7 +321,9 @@ def concept_note(S, seeds, T):
               "pose; slot content comes only from the detector. A reasoning module applies the confidence and "
               "visibility gates; the digital twin aggregates observations; a policy module (V1/V3/V4) and a "
               "next-best-view selector decide where to look; a go-to-pose controller drives the robot, routing "
-              "between aisles via the aisle end. The reasoning, twin, policy and viewpoint code is pure Python, "
+              "straight to each viewpoint along the open aisle. The audit finishes one shelf side entirely, "
+              "top level down, before crossing to the other side. The reasoning, twin, policy and viewpoint "
+              "code is pure Python, "
               "unit-tested and independent of the simulator."),
         ("h2", "4. Results (real Webots runs)"),
         ("p", f"Evaluation protocol: seeds 1-12 generated the training frames, seeds 13-14 were used only to "
@@ -324,17 +344,22 @@ def concept_note(S, seeds, T):
               f"{v3['time'] - v1['time']:.0f} s per audit: in a static scene the same viewpoint returns the same image. "
               f"Active verification spent a similar amount of extra time ({v4['time'] - v1['time']:.0f} s) but chose "
               f"viewpoints on the far side of the blocker, and resolved most of the slots the patrol could not."),
-        ("p", f"The conservative rule did not cost correctness. No strategy produced a false EMPTY or a false "
-              f"alarm, and every slot that received a decision was correct ({v4['dec_acc']:.0f}% decided accuracy "
-              f"for all three). The remaining errors are explicit UNVERIFIED slots, which a human can check. Active "
-              f"verification identified {v4['caught']} of {v4['real']} real discrepancies, against "
-              f"{v1['caught']} for the fixed patrol."),
+        ("p", f"The conservative rule kept wrong decisions rare, but not absent. Across {n * nslots} slot "
+              f"decisions per strategy there were {v1['fe_n']}, {v3['fe_n']} and {v4['fe_n']} false EMPTY "
+              f"reports out of {v4['not_empty_n']} non-empty slots, and decided accuracy was "
+              f"{v1['dec_acc']:.1f}%, {v3['dec_acc']:.1f}% and {v4['dec_acc']:.1f}% respectively. The great "
+              f"majority of remaining errors are explicit UNVERIFIED slots, which a human can check, rather "
+              f"than confident wrong answers. Active verification identified {v4['caught']} of {v4['real']} "
+              f"real discrepancies, against {v1['caught']} for the fixed patrol."),
         ("p", f"Where it still fails: {F['v4_left']} slots stayed UNVERIFIED ({F['v4_left_all_views']} after all four viewpoints, "
               f"{F['v4_left_occluded']} behind blockers). In {F['v4_left_right_label']} of them the detector already had the right label, "
               f"but the 0.70 visibility gate held the decision back; tuning this gate on validation data is the "
-              f"obvious next step. During development we also found that the side viewpoints first faced straight "
-              f"ahead, which put the slot at the image edge so that re-looks never helped; aiming them at the slot, "
-              f"recapturing data and retraining fixed this before the evaluation above."),
+              f"obvious next step. Two of the {v4['real']} discrepancies were also decided wrongly rather "
+              f"than left open. During development we found that blockers were briefly excluded from the "
+              f"training labels by the image-edge filter that drops truncated cartons; because a blocker sits "
+              f"close to the camera and off the bay centre, almost every one is truncated, so the filter cost "
+              f"12x the blocker boxes. A truncated carton has an ambiguous SKU and a truncated blocker does "
+              f"not, so the two classes are deliberately filtered differently."),
         ("h2", "6. Expected impact"),
         ("p", "An audit robot is only useful if its reports can be acted on without re-checking. By refusing to "
               "guess and by spending extra effort only on the slots it could not resolve, ShelfScan aims to give "
@@ -347,7 +372,8 @@ def concept_note(S, seeds, T):
         ("p", "Deployment path: a ROS 2 differential-drive base with LiDAR localisation on a shelf map (replacing "
               "GPS), an RGB camera on a mast, and an edge computer running the INT8-exported YOLOv8n; fine-tune "
               "on real shelf images and pilot on one aisle against a manual count. Current limits: simplified "
-              "scene (coloured boxes, one shelf level, static world, ideal pose), thresholds not yet tuned on "
+              "scene (rendered cartons with flat printed labels, static world, ideal pose, and a "
+              "scissor-lift look-alike on small running gear), thresholds not yet tuned on "
               "validation data, few truly empty slots in evaluation, and no hardware measurements yet."),
     ]
 
@@ -624,7 +650,7 @@ def note_markdown(note, S):
         elif kind == "h2":
             lines.append(f"## {text}\n")
         elif kind == "table":
-            lines.append((ROOT / "results/summary.md").read_text(encoding="utf-8"))
+            lines.append((ROOT / "results_v2/summary.md").read_text(encoding="utf-8"))
         else:
             lines.append(text + "\n")
     (DOCS / "concept_note.md").write_text("\n".join(lines), encoding="utf-8")
@@ -645,9 +671,12 @@ def video_script(S, seeds, T):
          "something is not evidence that it is missing."),
         ("0:40-1:40", "2. The simulation", "Screen recording of Webots running an audit (robot driving along a row); "
          "then the camera frame with labels (docs/img/cam_example.png); then the architecture slide.",
-         f"We built the full system in Webots R2025a. Each random seed creates a warehouse with three shelf rows of "
-         f"six slots, four product types, gaps, misplaced items, and grey blocking boxes in front of some slots. "
-         f"The robot is a differential-drive base with a camera on a mast at shelf height. Its detector is a "
+         f"We built the full system in Webots R2025a. Each random seed creates a narrow aisle between two facing "
+         f"racking rows, three levels of five bays on each side, holding plain cardboard cartons in five "
+         f"different sizes, with gaps, misplaced items, and blocking cartons or pallets in front of some slots. "
+         f"Nothing is colour-coded: a carton's product type is readable only from a big black-and-white pattern "
+         f"printed on its shipping label, so the detector has to work from shape and print. The robot is a "
+         f"scissor-lift AMR whose camera rides a powered lift up to each shelf level. Its detector is a "
          f"YOLOv8n network that we fine-tuned on {T['n_train'] + T['n_val']} frames captured automatically in "
          f"the simulator from twelve training seeds. On held-out "
          f"frames it reaches an mAP50 of {T['map50']:.2f}. For every slot, the robot compares what it sees with "
@@ -655,7 +684,7 @@ def video_script(S, seeds, T):
          f"only called empty if it is clearly visible and the detector positively sees an empty slot. Anything "
          f"uncertain becomes unverified, and the active-verification policy then drives to a new viewpoint, on "
          f"the far side of the blocking object, and looks again."),
-        ("1:40-3:05", "3. The outcome", "Results slide: table and chart from results/results.csv.",
+        ("1:40-3:05", "3. The outcome", "Results slide: table and chart from results_v2/results.csv.",
          f"We ran three strategies on {n} warehouse layouts the detector had never seen, all in Webots: a fixed "
          f"patrol, a re-scan from the same position, and active verification. Slot accuracy, counting unverified "
          f"slots as wrong, was {v1['acc']:.1f} percent for the fixed patrol, {v3['acc']:.1f} percent for "
@@ -664,10 +693,10 @@ def video_script(S, seeds, T):
          f"empty reports: {v1['fe_n']}, {v3['fe_n']} and {v4['fe_n']} slots in total. Of the {v4['real']} real "
          f"discrepancies, missing or misplaced items, the three strategies identified {v1['caught']}, "
          f"{v3['caught']} and {v4['caught']}. "
-         + ("Every slot that got a decision was correct; all errors were honest 'unverified' slots. "
-            if all(S[p]["dec_acc"] == 100 for p in POL) else "")
-         + ("Re-scanning from the same spot changed nothing, because the same viewpoint returns the same image; "
-            "only moving to a new viewpoint helped. " if slot_facts()["v1v3_diff"] == 0 else "")
+         + (f"Decided accuracy stayed at {v4['dec_acc']:.1f} percent or better, so nearly every error is an "
+            f"honest 'unverified' rather than a confident wrong answer. ")
+         + ("Re-scanning from the same spot bought nothing, because the same viewpoint returns the same "
+            "image; only moving to a new viewpoint helped. ")
          + f"The cost of looking again is time: the average audit took "
          f"{v1['time']:.0f} simulated seconds for the fixed patrol, {v3['time']:.0f} for re-scan and "
          f"{v4['time']:.0f} for active verification."),
@@ -676,15 +705,17 @@ def video_script(S, seeds, T):
          "dependency, so they move to a real robot unchanged. On hardware we would use a ROS 2 differential-drive "
          "base with LiDAR localisation on a shelf map instead of simulator GPS, an RGB camera on a mast at shelf "
          "height, and an edge computer running the detector, exported to INT8. After fine-tuning on real shelf photos, "
-         "the first trial would be one aisle, checked against a manual count. We are honest about the limits: this is a simplified scene with coloured boxes as products, one "
-         "shelf level and ideal localisation, the thresholds are design defaults, and nothing has run on a "
+         "the first trial would be one aisle, checked against a manual count. We are honest about the limits: "
+         "everything here is simulation. The cartons and their labels are rendered, the world is static, "
+         "localisation is ideal, the robot is a scissor-lift look-alike on small running gear, the two decision "
+         "thresholds are design defaults rather than tuned values, and nothing has run on a "
          "physical robot yet. What the simulation does show is the core idea: a robot that knows what it has not "
          "seen, and goes to look again. Thank you."),
     ]
     words = sum(len(t.split()) for *_, t in sec)
     lines = ["# ShelfScan AMR: 4-minute demo video voice-over\n",
              f"About {words} words, roughly 4 minutes at ~140 words per minute. All numbers are from "
-             f"results/results.csv ({n} unseen seeds, real Webots runs).\n",
+             f"results_v2/results.csv ({n} unseen seeds, real Webots runs).\n",
              "Covers the four required points: (1) problem, (2) simulation, (3) outcome, (4) path to reality.\n"]
     for t, head, shots, text in sec:
         lines += [f"## {t}  {head}\n", f"*On screen:* {shots}\n", text + "\n"]
@@ -693,7 +724,7 @@ def video_script(S, seeds, T):
               "`python webots/tools/make_world.py --seed 101 --controller shelfscan_audit`, then open "
               "`webots/worlds/warehouse.wbt` in the Webots GUI and press play (V4_active is the default policy; "
               "set `SHELFSCAN_POLICY` to switch). Webots closes itself when the audit ends.\n",
-              "- Show `results/results.csv` or the results slide when reading numbers.\n",
+              "- Show `results_v2/results.csv` or the results slide when reading numbers.\n",
               "- Keep the final video at or under 4:00.\n"]
     (DOCS / "video_script.md").write_text("\n".join(lines), encoding="utf-8")
     return words
