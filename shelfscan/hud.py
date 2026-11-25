@@ -41,11 +41,17 @@ STATUS_COLOUR = {
 # (tried: the slot, detector and twin lines were barely legible). Under the
 # overlay the backdrop is the floor and racking - mid-tone - which is what the
 # action and tally lines have been readable against all along.
+#
+# No reading line is smaller than 0.044. The detector line is the longest of
+# them - it can list four classes with counts and confidences - and was set to
+# 0.040 to buy width, but at 1080p that is the one line a viewer has to lean in
+# for. It now matches the decode and twin lines; the longest text it can
+# produce still fits the view at that size.
 PANEL_X, PANEL_Y = 0.02, 0.655
 SLOT, DET, DECODE, TWIN, STATE, NEXT, TALLY = range(7)
 LAYOUT = {
     SLOT:   (PANEL_X, PANEL_Y + 0.000, 0.052, WHITE),
-    DET:    (PANEL_X, PANEL_Y + 0.040, 0.040, WHITE),
+    DET:    (PANEL_X, PANEL_Y + 0.040, 0.044, WHITE),
     DECODE: (PANEL_X, PANEL_Y + 0.077, 0.044, WHITE),
     TWIN:   (PANEL_X, PANEL_Y + 0.114, 0.044, WHITE),
     STATE:  (PANEL_X, PANEL_Y + 0.155, 0.065, WHITE),
@@ -54,6 +60,16 @@ LAYOUT = {
 }
 # Where the Webots camera overlay sits, as a fraction of a ~1314x747 view.
 CAM_OVERLAY = (0.49, 0.64)
+# ... and that view's aspect. setLabel takes `size` as a fraction of the view
+# HEIGHT but x as a fraction of its WIDTH, so working out whether a line fits
+# across the view needs the ratio between them.
+VIEW_ASPECT = 1314 / 747
+# Mean advance per character, in units of `size`. Webots exposes no text
+# metrics, so this is measured off a capture: the 47-character detector line of
+# docs/hud_shots/04_S0-2-1_OK.png spans 275 of 1314 px at size 0.040, i.e.
+# 0.196*size per character. Rounded up for headroom - it is only ever used to
+# check that a line cannot run off the view.
+CHAR_ADVANCE = 0.25
 
 # Order the detector classes are listed in, so the line does not reshuffle
 # between frames. Anything not named here is appended, sorted, after them.

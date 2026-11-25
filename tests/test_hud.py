@@ -236,6 +236,28 @@ class TestHudRender(unittest.TestCase):
             self.assertTrue(0.0 <= x < 1.0 and 0.0 <= y < 1.0)
             self.assertTrue(0.0 < size < 1.0)
 
+    def test_no_reading_line_is_smaller_than_the_decode_line(self):
+        """The detector line is the longest, so it is the one tempted into a
+        smaller size to buy width - and the one that then cannot be read in a
+        1080p recording. It must stay at least as large as its neighbours."""
+        floor = H.LAYOUT[H.DECODE][2]
+        for lid in (H.SLOT, H.DET, H.DECODE, H.TWIN, H.STATE):
+            self.assertGreaterEqual(H.LAYOUT[lid][2], floor)
+
+    def test_the_longest_detector_line_still_fits_the_view(self):
+        """Worst case: every class of one detector set present, each with a
+        count and a confidence. Webots exposes no text metrics, so this
+        uses the advance measured off a real capture - and `size` is a
+        fraction of the view HEIGHT while x is a fraction of its width, hence
+        the aspect divisor."""
+        from shelfscan.robot_utils import class_set
+        x, _, size, _ = H.LAYOUT[H.DET]
+        per_char = size * H.CHAR_ADVANCE / H.VIEW_ASPECT
+        for which in ("v2", "v3"):
+            boxes = [((0, 0, 9, 9), c, 0.88) for c in class_set(which)]
+            text = H.detector_line(boxes)
+            self.assertLess(x + len(text) * per_char, 1.0, text)
+
     def test_every_line_has_its_own_label_id(self):
         ids = (H.SLOT, H.DET, H.DECODE, H.TWIN, H.STATE, H.NEXT, H.TALLY)
         self.assertEqual(len(set(ids)), len(ids))
