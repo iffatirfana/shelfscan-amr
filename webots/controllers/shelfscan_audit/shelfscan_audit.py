@@ -1,7 +1,20 @@
 """Run one audit policy in Webots with the trained YOLO detector and write results.
 
 Env: SHELFSCAN_POLICY (V1_fixed | V3_rescan | V4_active), SHELFSCAN_WEIGHTS,
-     SHELFSCAN_LAYOUT, SHELFSCAN_RESULTS (output dir, default results_v2).
+     SHELFSCAN_LAYOUT, SHELFSCAN_RESULTS (output dir, default results_v2),
+     SHELFSCAN_CLASSES (v2 | v3).
+
+DETECTOR v3 (SHELFSCAN_CLASSES=v3, with models_v3 weights): the 4-class model
+of the QR world - cardboard_box, label, slot_empty, blocker. It has no SKU
+class at all, so it CANNOT name a SKU even by accident; only a decoded payload
+can. Having a class for the plate turns code reading from a search into a
+crop: each detected `label` box is padded, upscaled 3x and sharpened before
+decoding, and a cardboard_box with no label box of its own is decoded as the
+fallback (shelfscan/decode.py). Everything downstream is unchanged - a payload
+is still matched to a slot by projecting the map, slot_empty still needs
+conf >= 0.60 and visibility >= 0.70, a blocker still drops visibility and
+sends the slot to V4, and a slot with no readable code still ends UNVERIFIED.
+With SHELFSCAN_CLASSES unset none of that runs and v2 reproduces exactly.
 
 LABELS (MVP, SHELFSCAN_LABEL=qr|barcode, world built with --label): every
 frame is also read for machine-readable codes - QR with
@@ -66,19 +79,40 @@ from ultralytics import YOLO                                     # noqa: E402
 from shelfscan.geometry import project_box, visibility_and_side  # noqa: E402
 from shelfscan.hud import Hud, attach as hud_attach              # noqa: E402
 from shelfscan.policies import POLICIES                          # noqa: E402
-from shelfscan.robot_utils import (CLASSES, Driver, Lift,        # noqa: E402
+from shelfscan import decode as DEC                              # noqa: E402
+from shelfscan.robot_utils import (Driver, Lift, class_set,      # noqa: E402
                                    content_box, load_layout)
 from shelfscan.scissor import ScissorLinks                       # noqa: E402
 from shelfscan.twin import DigitalTwin                           # noqa: E402
 from shelfscan.types import EMPTY_CLASS, Observation, Status     # noqa: E402
 
 CONF_MIN = 0.25
-IMGSZ = int(os.environ.get("SHELFSCAN_IMGSZ", "320"))   # must match training
+
+# Which detector is loaded. SHELFSCAN_CLASSES=v3 selects the 4-class model of
+# the QR world (cardboard_box, label, slot_empty, blocker) and with it the
+# crop-guided decode path below. Unset means the original 6-class v2 model and
+# the original whole-frame decode - not one line of the v3 path runs, so the
+# committed v2 results reproduce exactly.
+CLASSES = class_set()
+V3 = CLASSES[0] == "cardboard_box"
+# The SKU vocabulary of the WORLD, which is not the detector's class set: v3
+# has no SKU classes at all. code_sku() reads payloads, so it must name SKUs,
+# never detector classes - indexing the v3 list here would turn payload digit
+# 1 into "cardboard_box" and reject every QR.
+SKUS = class_set("v2")[:4]
+# Inference size must be the size the loaded model was trained at: both are
+# 320 (train/train_yolo.py --imgsz 320), kept per-model so they can diverge.
+TRAIN_IMGSZ = {False: 320, True: 320}
+IMGSZ = int(os.environ.get("SHELFSCAN_IMGSZ") or TRAIN_IMGSZ[V3])
 
 # Demo overlay. Off unless HUD is exactly "1", so an empty HUD= (which is what
 # run_batch exports for eval jobs) can never switch it on.
 HUD = os.environ.get("HUD") == "1"
 HUD_HOLD_STEPS = int(os.environ.get("HUD_HOLD_STEPS", "20"))
+# HUD_SHOTS=<dir> saves the 3D view, overlay and all, at each decided slot.
+# Needs rendering on (run_webots.py --no-minimize, no --no-rendering).
+HUD_SHOTS = os.environ.get("HUD_SHOTS") or ""
+HUD_MAX_SHOTS = int(os.environ.get("HUD_MAX_SHOTS", "14"))
 
 LABEL = os.environ.get("SHELFSCAN_LABEL") or (
     "qr" if os.environ.get("SHELFSCAN_QR") == "1" else "")
@@ -98,10 +132,10 @@ def code_sku(text):
     text = (text or "").strip()
     if text.isdigit() and len(text) == 6:
         i = int(text[0]) - 1
-        return CLASSES[i] if 0 <= i < 4 else None
+        return SKUS[i] if 0 <= i < 4 else None
     for part in text.split(";"):
         k, _, v = part.partition("=")
-        if k.strip().upper() == "SKU" and v.strip() in CLASSES[:4]:
+        if k.strip().upper() == "SKU" and v.strip() in SKUS:
             return v.strip()
     return None
 
@@ -162,10 +196,20 @@ def _read_barcode(img):
     return []
 
 
-def read_codes(img):
-    """[(payload, (cx, cy))] for every code in the frame, in frame pixels."""
+def read_codes(img, boxes=None):
+    """[(payload, (cx, cy))] for every code in the frame, in frame pixels.
+
+    v2 searches the whole frame. v3 has a detector class for the plate, so it
+    decodes the detected boxes instead - every `label` box, then any
+    cardboard_box with no label box of its own - each padded, upscaled 3x and
+    sharpened first. Either way the payload is placed by WHERE IT SITS in the
+    image and matched to a slot by the projected map, never by ground truth,
+    and either way the detector supplies no SKU: only a decoded payload can.
+    """
     if not LABEL:
         return []
+    if V3:
+        return DEC.read_codes(img, boxes or [], LABEL)
     return _read_qr(img) if LABEL == "qr" else _read_barcode(img)
 
 
@@ -214,8 +258,22 @@ def main():
             robot.step(step)
             lift.tick()
 
+        shot_fn = None
+        if HUD_SHOTS:
+            shot_dir = Path(HUD_SHOTS)
+            shot_dir.mkdir(parents=True, exist_ok=True)
+            n_shot = {"n": 0}
+
+            def shot_fn(tag):
+                if n_shot["n"] >= HUD_MAX_SHOTS:
+                    return
+                n_shot["n"] += 1
+                f = shot_dir / f"{n_shot['n']:02d}_{tag}.png"
+                robot.exportImage(str(f), 100)
+                print(f"hud: shot {f}", flush=True)
+
         hud = Hud(robot, total=len(order), label_type=LABEL or None,
-                  hold_steps=HUD_HOLD_STEPS, step_fn=hud_step)
+                  hold_steps=HUD_HOLD_STEPS, step_fn=hud_step, shot_fn=shot_fn)
         hud_attach(twin, hud)
 
     # ---- next-best-view decision logging (dev only) -----------------------
@@ -318,7 +376,7 @@ def main():
             level_ids = [i for i in order if slots[i]["rack"] == s["rack"]
                          and slots[i]["level"] == s["level"]]
             slot_boxes = {i: slot_box(slots[i]) for i in level_ids}
-            codes = read_codes(img)
+            codes = read_codes(img, boxes)
             if codes:
                 qr_frames += 1
             for text, (cx, cy) in codes:
@@ -361,7 +419,7 @@ def main():
             return Observation(sid, sku, 1.0, 1.0, None, vp, robot.getTime())
 
         own = [(b, c, p) for b, c, p in boxes if c != "blocker" and inside(b)]
-        if LABEL:
+        if LABEL or V3:
             # In label mode the SKU comes from a decoded code or not at all.
             # models_v2 was trained on printed SKU patterns; once the cartons
             # carry QR or Code128 instead, its SKU head is guessing, and a
@@ -370,6 +428,12 @@ def main():
             # sku_A). slot_empty is a judgement about shape, not about print,
             # so it is kept and the EMPTY rule and both thresholds are
             # untouched. A slot with no readable code now stays UNVERIFIED.
+            #
+            # v3 is filtered whether or not label mode is on, because its class
+            # set holds no SKU at all: cardboard_box says a carton is there,
+            # never which one. Letting it through would have classify() compare
+            # "cardboard_box" against the expected SKU and call every slot
+            # MISPLACED. The gate is therefore structural in v3, not a policy.
             own = [(b, c, p) for b, c, p in own if c == EMPTY_CLASS]
         label, conf = (None, 0.0)
         if own:

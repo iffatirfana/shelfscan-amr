@@ -27,13 +27,20 @@ STATUS_COLOUR = {
 
 # Where each line sits in the 3D view: (label id, x, y, size, colour).
 # Ids are fixed so a redraw replaces a line instead of stacking a new one.
+#
+# The block starts at PANEL_Y, not at the top of the view: Webots draws the
+# robot's Camera device as a magenta-bordered overlay in the TOP-LEFT corner,
+# and a panel at y=0.015 lands straight on it - white text survived that, the
+# grey lines did not. Keeping the camera overlay visible is worth more than
+# the top of the screen: it is the inset that shows the code being read.
+PANEL_Y = 0.52
 SLOT, DET, DECODE, TWIN, STATE, NEXT, TALLY = range(7)
 LAYOUT = {
-    SLOT:   (0.02, 0.015, 0.055, WHITE),
-    DET:    (0.02, 0.060, 0.045, GREY),
-    DECODE: (0.02, 0.098, 0.045, GREY),
-    TWIN:   (0.02, 0.136, 0.045, GREY),
-    STATE:  (0.02, 0.180, 0.070, WHITE),
+    SLOT:   (0.02, PANEL_Y + 0.000, 0.055, WHITE),
+    DET:    (0.02, PANEL_Y + 0.047, 0.045, WHITE),
+    DECODE: (0.02, PANEL_Y + 0.087, 0.045, WHITE),
+    TWIN:   (0.02, PANEL_Y + 0.127, 0.045, WHITE),
+    STATE:  (0.02, PANEL_Y + 0.173, 0.070, WHITE),
     NEXT:   (0.02, 0.870, 0.095, ACTION),
     TALLY:  (0.02, 0.950, 0.048, WHITE),
 }
@@ -110,6 +117,9 @@ def status_entry(status):
     return st.value, STATUS_COLOUR[st]
 
 
+DECIDING = "deciding..."
+
+
 def action_line(action):
     return f"NEXT  {action}"
 
@@ -148,13 +158,14 @@ class Hud:
     """
 
     def __init__(self, robot, total, label_type=None, hold_steps=20,
-                 step_fn=None, font="Arial"):
+                 step_fn=None, font="Arial", shot_fn=None):
         self.robot = robot
         self.total = total
         self.label_type = label_type
         self.hold_steps = hold_steps
         self.step_fn = step_fn
         self.font = font
+        self.shot_fn = shot_fn    # optional: save a screenshot of the view
         self.seen = {}            # slot_id -> 1-based scan index
         self.prev = None          # slot dict of the previous observation
         self.slot = None
@@ -190,12 +201,28 @@ class Hud:
         self.counts = counts
         self._put(STATE, text, colour)
         self._put(TALLY, tally_line(counts))
+        # Clear the action BEFORE the hold. It described the move that brought
+        # the robot here, and that move is now over: leaving it up makes every
+        # decision frame - exactly the frame a viewer pauses on - read as a
+        # prediction of something already done. What comes next genuinely is
+        # not known yet, because V4 picks its re-looks from this very result,
+        # so the honest line is that a decision is being taken. begin() puts
+        # the real action up the moment there is one.
+        self._put(NEXT, action_line(DECIDING))
         self.hold()
+        self._shot(f"{self.slot_id}_{text}")
 
     def finish(self, counts):
         self._put(NEXT, action_line(next_action(self.prev, None)))
         self._put(TALLY, tally_line(counts))
         self.hold()
+        self._shot("complete")
+
+    def _shot(self, tag):
+        """Screenshot after the hold, so the view is settled and every line of
+        the panel is the one that belongs to this slot."""
+        if self.shot_fn is not None:
+            self.shot_fn(tag)
 
     # -- the only call that costs simulation time -------------------------
     def hold(self):

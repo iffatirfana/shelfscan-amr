@@ -35,6 +35,10 @@ def main():
     ap.add_argument("--timeout", type=float, default=600)
     ap.add_argument("--env", nargs="*", default=[])
     ap.add_argument("--mode", default="fast")
+    ap.add_argument("--no-minimize", action="store_true",
+                    help="leave the main window up. Needed for HUD screenshots: "
+                         "Supervisor.exportImage captures the 3D view, which a "
+                         "minimized window does not render.")
     ap.add_argument("--no-rendering", action="store_true",
                     help="disable main-window rendering; camera devices still "
                          "render offscreen. Verify on a seed before trusting it.")
@@ -43,7 +47,9 @@ def main():
     for kv in a.env:
         k, v = kv.split("=", 1)
         env[k] = v
-    cmd = [webots_exe(), "--batch", f"--mode={a.mode}", "--minimize", "--stdout", "--stderr"]
+    cmd = [webots_exe(), "--batch", f"--mode={a.mode}", "--stdout", "--stderr"]
+    if not a.no_minimize:
+        cmd.append("--minimize")
     if a.no_rendering:
         cmd.append("--no-rendering")
     cmd.append(a.world)

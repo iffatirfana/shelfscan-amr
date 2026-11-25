@@ -168,6 +168,27 @@ class TestHudRender(unittest.TestCase):
         self.assertIn("expected SKU_1", self.robot.labels[H.TWIN])
         self.assertIn("read SKU_3", self.robot.labels[H.TWIN])
 
+    def test_status_clears_the_stale_action(self):
+        """At a decision the previous move is over and the next is not chosen
+        yet, so the line must not still claim the move that brought us here."""
+        self.hud.begin("S0-1-3", slot(level=1, bay=4))
+        self.assertIn("Bay 4", self.robot.labels[H.NEXT])
+        self.hud.status(Status.OK, {"OK": 1})
+        self.assertNotIn("Bay 4", self.robot.labels[H.NEXT])
+        self.assertIn(H.DECIDING, self.robot.labels[H.NEXT])
+
+    def test_the_next_move_replaces_deciding(self):
+        self.hud.begin("S0-1-3", slot(level=1, bay=3))
+        self.hud.status(Status.OK, {"OK": 1})
+        self.hud.begin("S0-1-4", slot(level=1, bay=4))
+        self.assertIn("Moving to Bay 4", self.robot.labels[H.NEXT])
+
+    def test_panel_clears_the_camera_overlay_corner(self):
+        """Webots draws the camera device over the top-left of the view."""
+        for lid in (H.SLOT, H.DET, H.DECODE, H.TWIN, H.STATE):
+            _, y, _, _ = H.LAYOUT[lid]
+            self.assertGreater(y, 0.5)
+
     def test_status_sets_the_state_colour_and_tally(self):
         self.hud.begin("S0-1-3", slot())
         self.hud.status(Status.MISPLACED, {"OK": 1, "MISPLACED": 1})
@@ -198,6 +219,23 @@ class TestHudRender(unittest.TestCase):
         ids = (H.SLOT, H.DET, H.DECODE, H.TWIN, H.STATE, H.NEXT, H.TALLY)
         self.assertEqual(len(set(ids)), len(ids))
         self.assertEqual(set(H.LAYOUT), set(ids))
+
+    def test_shot_fn_fires_after_the_hold_at_each_decided_slot(self):
+        shots = []
+        h = H.Hud(self.robot, total=30, hold_steps=2,
+                  step_fn=lambda: self.steps.append(1),
+                  shot_fn=shots.append)
+        h.begin("S0-1-3", slot())
+        self.assertEqual(shots, [])               # nothing before a decision
+        h.status(Status.MISPLACED, {"MISPLACED": 1})
+        self.assertEqual(shots, ["S0-1-3_MISPLACED"])
+        self.assertEqual(len(self.steps), 2)      # the hold ran first
+        h.finish({"MISPLACED": 1})
+        self.assertEqual(shots[-1], "complete")
+
+    def test_no_shot_fn_is_fine(self):
+        self.hud.begin("S0-1-3", slot())
+        self.hud.status(Status.OK, {"OK": 1})     # must not raise
 
     def test_hud_without_a_step_fn_never_blocks(self):
         h = H.Hud(FakeRobot(), total=1, hold_steps=5)

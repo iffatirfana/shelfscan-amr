@@ -77,6 +77,7 @@ def eval_seedwise(a):
         jobs = [(f"{p}_s{seed}", seed, "shelfscan_audit",
                  {"SHELFSCAN_POLICY": p, "SHELFSCAN_RESULTS": a.results,
                   "SHELFSCAN_WEIGHTS": a.weights,
+                  "SHELFSCAN_CLASSES": a.classes,
                   "SHELFSCAN_LABEL": a.label or "",
                   "SHELFSCAN_NBV_LOG": a.nbv_log or "",
                   "SHELFSCAN_NBV_MODEL": a.nbv_model or "",
@@ -172,6 +173,9 @@ def main():
                 jobs.append((f"{pol}_s{s}", s, "shelfscan_audit",
                              {"SHELFSCAN_POLICY": pol,
                               "SHELFSCAN_RESULTS": a.results,
+                              "SHELFSCAN_WEIGHTS": a.weights,
+                              "SHELFSCAN_CLASSES": a.classes,
+                              "SHELFSCAN_LABEL": a.label or "",
                               "HUD": ""}))
     print(f"{len(jobs)} runs, {a.jobs} in parallel", flush=True)
     with ThreadPoolExecutor(a.jobs) as ex:
