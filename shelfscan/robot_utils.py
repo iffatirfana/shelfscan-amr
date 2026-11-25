@@ -16,6 +16,28 @@ CLASSES_V3 = ["cardboard_box", "label", "slot_empty", "blocker"]
 CLASS_SETS = {"v2": CLASSES, "v3": CLASSES_V3}
 
 
+CAPTURE_KINDS = ("empty_blocked",)
+
+
+def slot_matches(slot, only):
+    """Does this slot belong to the capture subset named by `only`?
+
+    `only` empty (the default) means every slot. "empty_blocked" selects the
+    empty bays that have a blocker in front of them - roughly one slot in a
+    hundred, and the case the v3 detector got wrong on 5 of the 6 that
+    appeared in seeds 101-110. Collecting it by driving to those slots alone
+    costs one stop per seed instead of thirty, and leaves the scenes
+    themselves untouched: the frames still show whatever is on the level.
+
+    Shared so the capture controller and the batch runner cannot disagree
+    about which seeds are worth starting Webots for."""
+    if not only:
+        return True
+    if only == "empty_blocked":
+        return not slot["actual"] and bool(slot.get("blocker_kind"))
+    raise ValueError(f"unknown capture subset {only!r}")
+
+
 def results_dir(value, root):
     """Where to write the run's JSON and CSV.
 

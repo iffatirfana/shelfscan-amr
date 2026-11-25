@@ -25,7 +25,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "webots/tools"))
+sys.path.insert(0, str(ROOT))
 from make_world import make, wbt  # noqa: E402
+from shelfscan.robot_utils import slot_matches  # noqa: E402
 
 WORLDS = ROOT / "webots/worlds"
 POLICIES = ["V1_fixed", "V3_rescan", "V4_active"]
@@ -134,6 +136,14 @@ def main():
     ap.add_argument("--vp-keep", type=int, default=None,
                     help="capture mode: keep only this many of the four "
                          "viewpoints per slot, drawn at random")
+    ap.add_argument("--capture-only", choices=["empty_blocked"],
+                    help="capture mode: drive to only the slots of this kind, "
+                         "so a rare case can be collected over many seeds "
+                         "without paying for all 30 slots of each")
+    ap.add_argument("--empty-vis", type=float,
+                    help="capture mode: how much of an empty slot must be "
+                         "visible before it is labelled slot_empty "
+                         "(default 0.7; a carton is kept down to 0.35)")
     ap.add_argument("--vp-keep-empty", type=int, default=None,
                     help="capture mode: ... but this many for a slot with no "
                          "carton, so the rare slot_empty class is not thinned")
@@ -159,6 +169,14 @@ def main():
     val = set(seeds(a.val_seeds)) if a.val_seeds else set()
     for s in seeds(a.seeds):
         if a.mode == "capture":
+            # With --capture-only, most seeds hold no slot of the wanted kind
+            # at all (43 empty-and-blocked slots are spread over 29 of seeds
+            # 15-74). Starting Webots for those costs a minute and saves no
+            # frame, so the layout is generated here and the seed dropped.
+            if a.capture_only and not any(
+                    slot_matches(sl, a.capture_only)
+                    for sl in make(s, label=a.label)["slots"].values()):
+                continue
             # Split BY SEED when --val-seeds is given: a seed's 30 slots are
             # one layout, so splitting frames at random would put near-copies
             # of the same carton on both sides of the split.
@@ -166,6 +184,9 @@ def main():
                    "SHELFSCAN_VP_KEEP": str(a.vp_keep) if a.vp_keep else "",
                    "SHELFSCAN_VP_KEEP_EMPTY": (str(a.vp_keep_empty)
                                                if a.vp_keep_empty else ""),
+                   "SHELFSCAN_CAPTURE_ONLY": a.capture_only or "",
+                   "SHELFSCAN_EMPTY_VIS": (str(a.empty_vis)
+                                           if a.empty_vis else ""),
                    "SHELFSCAN_SPLIT": ("val" if s in val else "train") if val else ""}
             jobs.append((f"cap{s}", s, "data_capture", env))
         else:

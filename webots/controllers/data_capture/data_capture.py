@@ -35,11 +35,22 @@ from controller import Supervisor                               # noqa: E402
 from make_world import PLATE_T, code_plate                      # noqa: E402
 from shelfscan.geometry import project_box, to_yolo, visibility_and_side  # noqa: E402
 from shelfscan.robot_utils import (Driver, Lift,                 # noqa: E402
-                                   class_set, content_box, load_layout)
+                                   class_set, content_box, load_layout,
+                                   slot_matches)
 from shelfscan.scissor import ScissorLinks                       # noqa: E402
 
 OUT = Path(os.environ.get("SHELFSCAN_OUT", ROOT / "dataset"))
 VIEWPOINTS = ["center", "left", "right", "close"]
+# How much of an EMPTY slot must be visible before it is labelled slot_empty.
+# A carton is labelled down to 0.35 and a plate down to 0.5, but an empty slot
+# used to need 0.7 - so a bay half hidden behind a pallet had its blocker box
+# written and its slot_empty box dropped, which is a frame that says the right
+# answer for a blocked empty bay is "blocker". That is what v3 learned: on
+# seeds 101-110 it got 35/35 unobstructed empty slots right and 1/6 blocked
+# ones, calling them blocker at 0.93-0.97. The audit applies its OWN vis>=0.70
+# gate before believing an EMPTY, so the detector emitting the box lower down
+# costs nothing - the gate still decides. Default unchanged.
+EMPTY_VIS = float(os.environ.get("SHELFSCAN_EMPTY_VIS") or 0.7)
 JITTER = 0.08
 VAL_FRAC = 0.15
 CLASSES = class_set()
@@ -79,6 +90,9 @@ def label_boxes(s, label):
             for (cx, cy, cz), _ in carton_boxes(s)]
 
 
+ONLY = os.environ.get("SHELFSCAN_CAPTURE_ONLY") or ""
+
+
 def main():
     rng = random.Random(int(os.environ.get("SHELFSCAN_SEED", "0")))
     layout = load_layout()
@@ -108,7 +122,9 @@ def main():
     keep_empty = int(os.environ.get("SHELFSCAN_VP_KEEP_EMPTY") or len(VIEWPOINTS))
     n = 0
 
-    for sid in layout["order"]:
+    order = [sid for sid in layout["order"]
+             if slot_matches(layout["slots"][sid], ONLY)]
+    for sid in order:
         cur = layout["slots"][sid]
         # A fresh draw per slot, so over a seed all four viewpoints - and so
         # both camera distances and the two lateral angles - stay represented.
@@ -191,7 +207,7 @@ def main():
                     if not in_frame(bb):
                         continue
                     vis, _ = visibility_and_side(bb, blockers)
-                    if vis >= 0.7:
+                    if vis >= EMPTY_VIS:
                         boxes.append(("slot_empty", bb))
 
             if not boxes:
