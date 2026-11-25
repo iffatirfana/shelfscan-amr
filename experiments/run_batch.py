@@ -79,7 +79,10 @@ def eval_seedwise(a):
                   "SHELFSCAN_WEIGHTS": a.weights,
                   "SHELFSCAN_LABEL": a.label or "",
                   "SHELFSCAN_NBV_LOG": a.nbv_log or "",
-                  "SHELFSCAN_NBV_MODEL": a.nbv_model or ""}) for p in pols]
+                  "SHELFSCAN_NBV_MODEL": a.nbv_model or "",
+                  # a measured run is never recorded: clear HUD explicitly so
+                  # an exported HUD=1 in the shell cannot reach the controller
+                  "HUD": ""}) for p in pols]
         t0 = time.time()
         with ThreadPoolExecutor(len(jobs)) as ex:
             list(ex.map(lambda j: run_one(*j, a.timeout, a.version,
@@ -167,7 +170,9 @@ def main():
         else:
             for pol in a.policies.split(","):
                 jobs.append((f"{pol}_s{s}", s, "shelfscan_audit",
-                             {"SHELFSCAN_POLICY": pol, "SHELFSCAN_RESULTS": a.results}))
+                             {"SHELFSCAN_POLICY": pol,
+                              "SHELFSCAN_RESULTS": a.results,
+                              "HUD": ""}))
     print(f"{len(jobs)} runs, {a.jobs} in parallel", flush=True)
     with ThreadPoolExecutor(a.jobs) as ex:
         rows = list(ex.map(lambda j: run_one(*j, a.timeout, a.version,

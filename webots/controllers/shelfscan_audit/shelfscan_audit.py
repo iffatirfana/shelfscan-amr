@@ -29,6 +29,16 @@ derived from the bay geometry only - never from the true carton size, which is
 ground truth. Slot CONTENT comes only from the detector. Ground truth in
 layout.json is used only to score the result.
 
+HUD=1 (demo recording only) draws an on-screen overlay with Robot.setLabel -
+slot, detector boxes, decode, twin expectation, state, next action and a
+running tally - and holds the simulation for a few steps at each decided slot
+so the text is readable in a recording. It is a read-only view: it is handed
+what has already been decided and feeds nothing back, and the hold happens
+AFTER the frame has been captured and classified, so it cannot change what the
+detector sees either. With HUD unset nothing here runs and the run is
+unchanged; experiments/run_batch.py clears HUD for every eval job so an
+exported HUD=1 cannot leak into a measured run.
+
 SHELFSCAN_NBV_LOG=<path> (dev only, MVP) additionally writes one CSV row per
 CANDIDATE viewpoint at every next-best-view decision, with the features a
 learned picker could use and whether V4 chose that candidate. The hook runs
@@ -54,6 +64,7 @@ from controller import Supervisor                                # noqa: E402
 from ultralytics import YOLO                                     # noqa: E402
 
 from shelfscan.geometry import project_box, visibility_and_side  # noqa: E402
+from shelfscan.hud import Hud, attach as hud_attach              # noqa: E402
 from shelfscan.policies import POLICIES                          # noqa: E402
 from shelfscan.robot_utils import (CLASSES, Driver, Lift,        # noqa: E402
                                    content_box, load_layout)
@@ -63,6 +74,11 @@ from shelfscan.types import EMPTY_CLASS, Observation, Status     # noqa: E402
 
 CONF_MIN = 0.25
 IMGSZ = int(os.environ.get("SHELFSCAN_IMGSZ", "320"))   # must match training
+
+# Demo overlay. Off unless HUD is exactly "1", so an empty HUD= (which is what
+# run_batch exports for eval jobs) can never switch it on.
+HUD = os.environ.get("HUD") == "1"
+HUD_HOLD_STEPS = int(os.environ.get("HUD_HOLD_STEPS", "20"))
 
 LABEL = os.environ.get("SHELFSCAN_LABEL") or (
     "qr" if os.environ.get("SHELFSCAN_QR") == "1" else "")
@@ -189,6 +205,19 @@ def main():
     order = layout["order"]
     sides = list(dict.fromkeys(slots[sid]["rack"] for sid in order))
 
+    # ---- demo overlay (HUD=1) ---------------------------------------------
+    # hud.attach wraps twin.update rather than editing shelfscan.policies, so
+    # the policy code the offline harness shares stays untouched.
+    hud = None
+    if HUD:
+        def hud_step():
+            robot.step(step)
+            lift.tick()
+
+        hud = Hud(robot, total=len(order), label_type=LABEL or None,
+                  hold_steps=HUD_HOLD_STEPS, step_fn=hud_step)
+        hud_attach(twin, hud)
+
     # ---- next-best-view decision logging (dev only) -----------------------
     nbv_path = os.environ.get("SHELFSCAN_NBV_LOG")
     nbv_rows = []
@@ -260,6 +289,8 @@ def main():
         if current["key"] != key:
             finish_level(current["key"])
             current["key"] = key
+        if hud:                          # drawn BEFORE the robot sets off
+            hud.begin(sid, s)
         x, y, yaw = s["viewpoints"][vp]
         last_level["v"] = s["level"]
         lift.request(s["lift"])          # lift travels while the base drives
@@ -306,6 +337,10 @@ def main():
                 if i != sid:
                     twin.update(Observation(i, sku, 1.0, 1.0, None, vp,
                                             robot.getTime()))
+
+        if hud:
+            _txt, _sku = qr_here.get(sid, (None, None))
+            hud.detection(boxes, _txt, _sku)
 
         sb = slot_boxes[sid] if LABEL else slot_box(s)
         if sb is None:
@@ -372,6 +407,8 @@ def main():
         per_side[side] = dict(n_slots=len(ids), decided=dec,
                               time_s=round(robot.getTime() - t_side, 2))
     elapsed = robot.getTime() - t0
+    if hud:                              # after `elapsed`: the hold it spends
+        hud.finish(twin.summary())       # is not charged to the audit time
 
     # ---- scoring against ground truth (layout.json is used ONLY here) ----
     truth = {sid: true_status(slots[sid]["expected"], slots[sid]["actual"]) for sid in order}
