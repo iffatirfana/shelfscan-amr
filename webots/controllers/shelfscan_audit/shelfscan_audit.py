@@ -108,6 +108,12 @@ IMGSZ = int(os.environ.get("SHELFSCAN_IMGSZ") or TRAIN_IMGSZ[V3])
 
 # Demo overlay. Off unless HUD is exactly "1", so an empty HUD= (which is what
 # run_batch exports for eval jobs) can never switch it on.
+# Diagnostic: log EVERY raw box the detector returned, before `own` is
+# filtered. Without it the log shows only the classes that survived the
+# filter, so in v3 a slot the detector called cardboard_box and a slot it
+# saw nothing in both print as own=[] and look like the same failure.
+# Off by default, and it only prints - no decision reads it.
+DEBUG_BOXES = os.environ.get("SHELFSCAN_DEBUG_BOXES") == "1"
 HUD = os.environ.get("HUD") == "1"
 HUD_HOLD_STEPS = int(os.environ.get("HUD_HOLD_STEPS", "20"))
 # HUD_SHOTS=<dir> saves the 3D view, overlay and all, at each decided slot.
@@ -453,6 +459,12 @@ def main():
         print(f"obs {sid} vp={vp} pose=({px:.2f},{py:.2f},{pyaw:.2f},z={lift.height():.2f}) "
               f"slot_box={[round(v) for v in sb]} "
               f"own={[(c, round(p, 2)) for _, c, p in own]} n_det={len(boxes)} vis={vis:.2f} side={side}", flush=True)
+        if DEBUG_BOXES:
+            inner = " ".join(f"{c}:{p:.3f}{'*' if inside(b) else ''}"
+                             for b, c, p in sorted(boxes, key=lambda t: -t[2]))
+            print(f"raw {sid} vp={vp} conf_min={CONF_MIN} "
+                  f"boxes=[{inner}] (* = centre inside the slot box)",
+                  flush=True)
         return Observation(sid, label, conf, vis, side, vp, robot.getTime())
 
     # ---- one shelf side at a time, top level down, never interleaved -------
