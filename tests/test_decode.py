@@ -184,6 +184,78 @@ class TestSkuVocabulary(unittest.TestCase):
                          ["sku_A", "sku_B", "sku_C", "sku_D"])
 
 
+class TestScaleCascade(unittest.TestCase):
+    def test_scaled_never_exceeds_the_cap(self):
+        img = np.zeros((900, 900), np.uint8)
+        self.assertLessEqual(max(D.scaled(img, 3).shape), D.MAX_CROP_PX)
+
+    def test_scaled_leaves_a_unit_scale_alone(self):
+        img = np.zeros((40, 40), np.uint8)
+        self.assertIs(D.scaled(img, 1), img)
+
+    def test_cascade_is_three_scales(self):
+        self.assertEqual(D.SCALES, (1, 2, 3))
+
+    def test_read_crop_stops_at_the_first_scale_that_reads(self):
+        tried = []
+
+        def fake(crop):
+            tried.append(crop.shape[0])
+            return "PAYLOAD" if len(tried) == 2 else None
+
+        crop = np.zeros((50, 50), np.uint8)
+        import unittest.mock as mock
+        with mock.patch.object(D, "read_qr_crop", fake):
+            self.assertEqual(D.read_crop(crop, "qr"), "PAYLOAD")
+        self.assertEqual(len(tried), 2)        # stopped, did not try scale 3
+
+    def test_read_crop_tries_every_scale_before_giving_up(self):
+        tried = []
+        import unittest.mock as mock
+        with mock.patch.object(D, "read_qr_crop",
+                               lambda c: tried.append(c.shape[0]) or None):
+            self.assertIsNone(D.read_crop(np.zeros((50, 50), np.uint8), "qr"))
+        self.assertEqual(len(tried), len(D.SCALES))
+
+    def test_read_crop_of_none_is_none(self):
+        self.assertIsNone(D.read_crop(None, "qr"))
+
+
+class TestWholeFrameFallback(unittest.TestCase):
+    PAYLOAD = "SKU=sku_B;INV=INV-013-04"
+
+    def test_fallback_runs_when_no_crop_reads(self):
+        called = []
+
+        def fallback(img):
+            called.append(True)
+            return [(self.PAYLOAD, (320.0, 240.0))]
+
+        # a detected carton with nothing readable on it
+        got = D.read_codes(frame(), [((100, 100, 300, 300), "cardboard_box", 0.9)],
+                           "qr", fallback=fallback)
+        self.assertEqual(called, [True])
+        self.assertEqual(got, [(self.PAYLOAD, (320.0, 240.0))])
+
+    def test_fallback_runs_when_there_are_no_boxes_at_all(self):
+        called = []
+        D.read_codes(frame(), [], "qr",
+                     fallback=lambda im: called.append(True) or [])
+        self.assertEqual(called, [True])
+
+    def test_fallback_is_skipped_once_a_crop_reads(self):
+        called = []
+        img = frame()
+        box = paste(img, qr_patch(self.PAYLOAD, 110), 240, 180)
+        got = D.read_codes(img, [(box, "label", 0.95)], "qr",
+                           fallback=lambda im: called.append(True) or [])
+        self.assertEqual(called, [])
+        self.assertEqual([t for t, _ in got], [self.PAYLOAD])
+
+    def test_no_fallback_supplied_is_still_fine(self):
+        self.assertEqual(D.read_codes(frame(), [], "qr"), [])
+
+
 class TestAnnotate(unittest.TestCase):
     def test_returns_a_copy_and_leaves_the_frame_alone(self):
         img = frame()

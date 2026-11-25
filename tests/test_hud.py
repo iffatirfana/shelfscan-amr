@@ -159,6 +159,23 @@ class TestHudRender(unittest.TestCase):
         self.hud.begin("S0-1-0", slot(bay=0))       # a V4 re-look
         self.assertIn("slot 1/30", self.robot.labels[H.SLOT])
 
+    def test_begin_blanks_the_previous_slot_readings(self):
+        """The slot line names the slot being driven to; the readings below it
+        still belong to the one just left until the robot gets there."""
+        self.hud.begin("S0-2-4", slot(level=2, bay=4))
+        self.hud.detection([((0, 0, 1, 1), "label", 0.9)], "SKU=sku_C", "sku_C")
+        self.hud.status(Status.OK, {"OK": 1})
+        self.hud.begin("S0-1-4", slot(level=1, bay=4))
+        for lid in (H.DET, H.DECODE, H.TWIN, H.STATE):
+            self.assertEqual(self.robot.labels[lid], "")
+        self.assertIn("L1", self.robot.labels[H.SLOT])
+
+    def test_readings_come_back_on_arrival(self):
+        self.hud.begin("S0-1-4", slot(level=1, bay=4))
+        self.hud.detection([((0, 0, 1, 1), "blocker", 0.9)], None, None)
+        self.assertIn("blocker", self.robot.labels[H.DET])
+        self.assertIn("DECODE FAIL", self.robot.labels[H.DECODE])
+
     def test_detection_draws_detector_decode_and_twin(self):
         self.hud.begin("S0-1-3", slot(expected="sku_A"))
         self.hud.detection([((0, 0, 1, 1), "label", 0.88)],
@@ -183,16 +200,20 @@ class TestHudRender(unittest.TestCase):
         self.hud.begin("S0-1-4", slot(level=1, bay=4))
         self.assertIn("Moving to Bay 4", self.robot.labels[H.NEXT])
 
-    def test_panel_clears_the_camera_overlay_corner(self):
-        """Webots draws the camera device over the top-left of the view."""
-        for lid in (H.SLOT, H.DET, H.DECODE, H.TWIN, H.STATE):
-            _, y, _, _ = H.LAYOUT[lid]
-            self.assertGreater(y, 0.5)
+    def test_panel_clears_the_camera_overlay(self):
+        """Webots draws the camera device over the TOP-LEFT of the view, at
+        the camera's native size. Every line must miss that rectangle."""
+        ox, oy = H.CAM_OVERLAY
+        for lid, (x, y, _, _) in H.LAYOUT.items():
+            self.assertTrue(x > ox or y > oy,
+                            f"line {lid} at ({x}, {y}) is under the camera "
+                            f"overlay ({ox}, {oy})")
 
     def test_status_sets_the_state_colour_and_tally(self):
         self.hud.begin("S0-1-3", slot())
         self.hud.status(Status.MISPLACED, {"OK": 1, "MISPLACED": 1})
-        colour = next(c[5] for c in self.robot.calls if c[0] == H.STATE)
+        # the LAST write: begin() blanks the line before status() fills it
+        colour = [c[5] for c in self.robot.calls if c[0] == H.STATE][-1]
         self.assertEqual(colour, H.STATUS_COLOUR[Status.MISPLACED])
         self.assertIn("MISPLACED 1", self.robot.labels[H.TALLY])
 
@@ -226,9 +247,10 @@ class TestHudRender(unittest.TestCase):
                   step_fn=lambda: self.steps.append(1),
                   shot_fn=shots.append)
         h.begin("S0-1-3", slot())
-        self.assertEqual(shots, [])               # nothing before a decision
+        # one at the move, showing the action line, and one at the decision
+        self.assertEqual(shots, ["S0-1-3_move"])
         h.status(Status.MISPLACED, {"MISPLACED": 1})
-        self.assertEqual(shots, ["S0-1-3_MISPLACED"])
+        self.assertEqual(shots, ["S0-1-3_move", "S0-1-3_MISPLACED"])
         self.assertEqual(len(self.steps), 2)      # the hold ran first
         h.finish({"MISPLACED": 1})
         self.assertEqual(shots[-1], "complete")
@@ -286,7 +308,8 @@ class TestAttach(unittest.TestCase):
     def test_wrapper_ignores_updates_for_other_slots(self):
         self.hud.begin("S0-1-3", slot())
         self.twin.update(Obs("S0-1-4"))           # a code read for a neighbour
-        self.assertNotIn(H.STATE, self.robot.labels)
+        # begin() blanked the line; the neighbour's status must not fill it
+        self.assertEqual(self.robot.labels[H.STATE], "")
         self.assertEqual(self.steps, [])          # and spends no hold
 
     def test_wrapper_is_inert_before_the_first_slot(self):

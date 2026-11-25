@@ -201,15 +201,23 @@ def read_codes(img, boxes=None):
 
     v2 searches the whole frame. v3 has a detector class for the plate, so it
     decodes the detected boxes instead - every `label` box, then any
-    cardboard_box with no label box of its own - each padded, upscaled 3x and
-    sharpened first. Either way the payload is placed by WHERE IT SITS in the
+    cardboard_box with no label box of its own - each padded, sharpened and
+    swept over the same 3 scales x 2 binarizers v2 uses, but over a crop that
+    is mostly code. Either way the payload is placed by WHERE IT SITS in the
     image and matched to a slot by the projected map, never by ground truth,
     and either way the detector supplies no SKU: only a decoded payload can.
     """
     if not LABEL:
         return []
     if V3:
-        return DEC.read_codes(img, boxes or [], LABEL)
+        # ... and when no crop reads, the v2 whole-frame sweep is the fallback,
+        # so v3 can only lose a code to a frame where BOTH approaches fail.
+        return DEC.read_codes(img, boxes or [], LABEL, fallback=_read_frame)
+    return _read_frame(img)
+
+
+def _read_frame(img):
+    """The v2 whole-frame reader. Unchanged, and still the only path in v2."""
     return _read_qr(img) if LABEL == "qr" else _read_barcode(img)
 
 

@@ -28,22 +28,32 @@ STATUS_COLOUR = {
 # Where each line sits in the 3D view: (label id, x, y, size, colour).
 # Ids are fixed so a redraw replaces a line instead of stacking a new one.
 #
-# The block starts at PANEL_Y, not at the top of the view: Webots draws the
-# robot's Camera device as a magenta-bordered overlay in the TOP-LEFT corner,
-# and a panel at y=0.015 lands straight on it - white text survived that, the
-# grey lines did not. Keeping the camera overlay visible is worth more than
-# the top of the screen: it is the inset that shows the code being read.
-PANEL_Y = 0.52
+# The panel sits TOP-RIGHT, not top-left, because Webots draws the robot's
+# Camera device as a magenta-bordered overlay in the top-left corner at the
+# camera's native 640x480. In a 1314x747 view that covers x < 0.49, y < 0.64 -
+# enough to swallow a left-hand panel wherever it is put vertically (measured:
+# at y=0.52 the slot, detector and decode lines were all still on top of it).
+# Keeping that overlay readable is worth the move: it IS the camera inset,
+# showing the code as it is read.
+#
+# It goes BELOW the overlay rather than beside it. To the right of the overlay
+# the backdrop is the pale warehouse wall, and white text on it was washed out
+# (tried: the slot, detector and twin lines were barely legible). Under the
+# overlay the backdrop is the floor and racking - mid-tone - which is what the
+# action and tally lines have been readable against all along.
+PANEL_X, PANEL_Y = 0.02, 0.655
 SLOT, DET, DECODE, TWIN, STATE, NEXT, TALLY = range(7)
 LAYOUT = {
-    SLOT:   (0.02, PANEL_Y + 0.000, 0.055, WHITE),
-    DET:    (0.02, PANEL_Y + 0.047, 0.045, WHITE),
-    DECODE: (0.02, PANEL_Y + 0.087, 0.045, WHITE),
-    TWIN:   (0.02, PANEL_Y + 0.127, 0.045, WHITE),
-    STATE:  (0.02, PANEL_Y + 0.173, 0.070, WHITE),
-    NEXT:   (0.02, 0.870, 0.095, ACTION),
+    SLOT:   (PANEL_X, PANEL_Y + 0.000, 0.052, WHITE),
+    DET:    (PANEL_X, PANEL_Y + 0.040, 0.040, WHITE),
+    DECODE: (PANEL_X, PANEL_Y + 0.077, 0.044, WHITE),
+    TWIN:   (PANEL_X, PANEL_Y + 0.114, 0.044, WHITE),
+    STATE:  (PANEL_X, PANEL_Y + 0.155, 0.065, WHITE),
+    NEXT:   (0.02, 0.878, 0.095, ACTION),
     TALLY:  (0.02, 0.950, 0.048, WHITE),
 }
+# Where the Webots camera overlay sits, as a fraction of a ~1314x747 view.
+CAM_OVERLAY = (0.49, 0.64)
 
 # Order the detector classes are listed in, so the line does not reshuffle
 # between frames. Anything not named here is appended, sorted, after them.
@@ -186,7 +196,17 @@ class Hud:
         self.slot_id, self.slot = slot_id, slot
         self._put(NEXT, action_line(next_action(self.prev, slot)))
         self._put(SLOT, slot_line(slot, self.seen[slot_id], self.total))
+        # Blank the readings. They belong to the slot just left, and the line
+        # above them now names a different one: leaving them up puts one
+        # slot's id over another slot's detector boxes, decode and status for
+        # the whole drive. detection() and status() refill them on arrival.
+        for lid in (DET, DECODE, TWIN, STATE):
+            self._put(lid, "")
         self.prev = slot
+        # A shot of the action itself. The decision shot cannot show one: by
+        # then the move is over and the line reads "deciding...", so without
+        # this the action text never appears in a still.
+        self._shot(f"{slot_id}_move")
 
     def detection(self, boxes, text=None, sku=None):
         """Called with the detector output and the decode for this frame."""

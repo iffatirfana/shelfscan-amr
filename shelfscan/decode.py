@@ -23,9 +23,16 @@ LABEL_CLS = "label"
 BOX_CLS = "cardboard_box"
 
 PAD_FRAC = 0.10      # grow the detected box by this much of its own size
-SCALE = 3            # upscale the crop this many times
+SCALE = 3            # single-shot upscale, for prep_crop's own callers
 MIN_CROP_PX = 10     # a crop smaller than this cannot hold a readable code
 MAX_CROP_PX = 1600   # ... and one larger than this only costs time
+
+# Scale cascade, the same shape the v2 full-frame reader uses. A single
+# upscale decoded QR as well as the full frame did but lost ground on Code128,
+# which has no error correction: measured on seeds 101-110, one scale read
+# 209/259 codes against the full frame's 217/259. The cost of a miss is a
+# re-look, so trying three sizes before giving up is cheap by comparison.
+SCALES = (1, 2, 3)
 
 
 def centre(box):
@@ -76,6 +83,16 @@ def prep_crop(img, box, pad_frac=PAD_FRAC, scale=SCALE, do_sharpen=True):
     return sharpen(crop) if do_sharpen else crop
 
 
+def scaled(img, k):
+    """Upscale by k, never past MAX_CROP_PX on the long side."""
+    if k <= 1:
+        return img
+    k = min(k, MAX_CROP_PX / max(1, max(img.shape[:2])))
+    if k <= 1.0:
+        return img
+    return cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC)
+
+
 def read_qr_crop(crop):
     """Payload of the QR in a crop, or None.
 
@@ -110,15 +127,29 @@ def read_code128_crop(crop):
     return None
 
 
-def read_crop(crop, label_type):
-    if label_type == "barcode":
-        return read_code128_crop(crop)
-    return read_qr_crop(crop)
+def read_crop(crop, label_type, scales=SCALES):
+    """Cascade the reader over `scales`, first payload wins.
+
+    read_code128_crop already walks its two binarizers at each size, so this is
+    the same 3-scales x 2-binarizers sweep the v2 full-frame reader does - just
+    over a crop that is mostly code instead of over the whole frame."""
+    if crop is None:
+        return None
+    read = read_code128_crop if label_type == "barcode" else read_qr_crop
+    for k in scales:
+        text = read(scaled(crop, k))
+        if text:
+            return text
+    return None
 
 
-def decode_box(img, box, label_type, pad_frac=PAD_FRAC, scale=SCALE):
-    """Decode one detected box. Payload text, or None."""
-    return read_crop(prep_crop(img, box, pad_frac, scale), label_type)
+def decode_box(img, box, label_type, pad_frac=PAD_FRAC, scales=SCALES):
+    """Decode one detected box. Payload text, or None.
+
+    The crop is built ONCE at native resolution and the cascade upscales that,
+    so every size is resampled from the same pixels rather than from an
+    already-interpolated image."""
+    return read_crop(prep_crop(img, box, pad_frac, scale=1), label_type, scales)
 
 
 def crop_targets(boxes, label_cls=LABEL_CLS, box_cls=BOX_CLS):
@@ -139,17 +170,29 @@ def crop_targets(boxes, label_cls=LABEL_CLS, box_cls=BOX_CLS):
     return out
 
 
-def read_codes(img, boxes, label_type, pad_frac=PAD_FRAC, scale=SCALE):
+def read_codes(img, boxes, label_type, pad_frac=PAD_FRAC, scales=SCALES,
+               fallback=None):
     """[(payload, (cx, cy))] for every code read from a detected box.
 
     The same shape the full-frame v2 reader returns, so the caller maps a
     payload onto a slot exactly as before - by where it sits in the image,
-    using the projected map and the robot's pose, never ground truth."""
+    using the projected map and the robot's pose, never ground truth.
+
+    `fallback(img) -> [(payload, (cx, cy))]` is the whole-frame reader, used
+    only when the crops yield NOTHING. A frame with no readable crop is one
+    where the detector found no plate, or where the plate will not read even
+    close up; either way the full-frame sweep is the last thing to try, and it
+    is exactly what v2 would have done. It is skipped as soon as one crop
+    reads, because the crop path is then working and the sweep would only cost
+    time - which does mean a frame can still miss a SECOND code the sweep
+    would have found."""
     out = []
     for box, _cls in crop_targets(boxes):
-        text = decode_box(img, box, label_type, pad_frac, scale)
+        text = decode_box(img, box, label_type, pad_frac, scales)
         if text:
             out.append((text, centre(box)))
+    if not out and fallback is not None:
+        return list(fallback(img))
     return out
 
 
