@@ -403,6 +403,28 @@ def barcode_rect(size):
     return round(w, 4), round(min(BC_ASPECT * w, BC_H_FRAC * sz), 4)
 
 
+PLATE_T = 0.003           # code plate thickness, m
+PLATE_GAP = 0.0025        # plate centre, out from the carton front face
+
+
+def code_plate(size, label):
+    """Pose and extent of the QR/Code128 plate in the CARTON's local frame:
+    (dy, dz, w, h) - offset out along local +y (the aisle-facing direction),
+    offset up along local +z, and the plate's width and height in m.
+
+    The single source of truth for where the plate sits: _carton_children
+    builds the .wbt node from it, and the capture controller projects the same
+    box to get the `label` training boxes. Thickness is PLATE_T."""
+    _, sy, sz = size
+    if label == "barcode":
+        w, h = barcode_rect(size)
+        dz = -0.04 * sz
+    else:
+        w = h = qr_side(size)
+        dz = 0.0
+    return sy / 2 + PLATE_GAP, dz, w, h
+
+
 def _carton_children(size, shade, sku, code=None, label=None):
     """Corrugated carton: brown body, darker tape across the top and along the
     front seam, and - for a real SKU carton - a white shipping label carrying
@@ -419,12 +441,7 @@ def _carton_children(size, shade, sku, code=None, label=None):
         out.append(_box(_app("CARD_TAPE"), sx + 0.004, 0.004, SEAM_T,
                         0, sy / 2 + 0.002, sz / 2 - SEAM_T / 2))
     if code:
-        if label == "barcode":
-            cw, ch = barcode_rect(size)
-            cz = -0.04 * sz
-        else:
-            cw = ch = qr_side(size)
-            cz = 0.0
+        cy_off, cz, cw, ch = code_plate(size, label)
         # filtering 0 (nearest) keeps a QR crisp, and a QR survives the
         # aliasing because of its error correction. A Code128 has none: at
         # 1024 px of texture rendered into ~320 px, nearest sampling drops two
@@ -432,11 +449,11 @@ def _carton_children(size, shade, sku, code=None, label=None):
         # therefore use Webots' filtering so the downsample averages instead.
         filt = 0 if label == "qr" else 4
         out.append(
-            f'Pose {{ translation 0 {sy / 2 + 0.0025:.4f} {cz:.4f} children [ '
+            f'Pose {{ translation 0 {cy_off:.4f} {cz:.4f} children [ '
             f'Shape {{ appearance PBRAppearance {{ baseColor 1 1 1 '
             f'roughness 0.55 metalness 0 baseColorMap ImageTexture {{ '
             f'url [ "{CODE_DIR}/{code}.png" ] filtering {filt} }} }} '
-            f'geometry Box {{ size {cw} 0.003 {ch} }} }} ] }}')
+            f'geometry Box {{ size {cw} {PLATE_T} {ch} }} }} ] }}')
     elif sku:
         lw, lh = LABEL_W_FRAC * sx, LABEL_H_FRAC * sz
         lz = LABEL_Z_FRAC * sz

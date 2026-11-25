@@ -7,6 +7,20 @@ from pathlib import Path
 
 CLASSES = ["sku_A", "sku_B", "sku_C", "sku_D", "slot_empty", "blocker"]
 
+# v3 class set, for the QR/barcode world: the four SKUs collapse into ONE
+# cardboard_box class (in that world the SKU is carried by the code, not by the
+# carton's look, so asking the detector to tell SKUs apart is asking it to read
+# the code - which is zxing's job), and the code plate itself becomes a class so
+# the audit can crop it before decoding.
+CLASSES_V3 = ["cardboard_box", "label", "slot_empty", "blocker"]
+CLASS_SETS = {"v2": CLASSES, "v3": CLASSES_V3}
+
+
+def class_set(name=None):
+    """The class list to write labels against. SHELFSCAN_CLASSES selects it;
+    the default is the original v2 set, so every existing run is unchanged."""
+    return CLASS_SETS[name or os.environ.get("SHELFSCAN_CLASSES") or "v2"]
+
 # TurtleBot3 Burger
 WHEEL_R, AXLE, MAX_W = 0.033, 0.160, 6.67
 

@@ -16,3 +16,9 @@ webots/worlds/warehouse_qr.wbt
 webots/worlds/warehouse_bc.wbt
 webots/worlds/layout_qr.json
 webots/worlds/layout_bc.json
+
+# v3 (4-class, QR world) frames, previews and weights. The dataset is
+# regenerated from its seeds by experiments/run_batch.py capture --classes v3,
+# and data.yaml is written by train/train_yolo.py (it holds an absolute path).
+/datasets_v3/
+/models_v3/

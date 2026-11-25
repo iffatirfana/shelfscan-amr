@@ -2,6 +2,9 @@
 
     # training data from seeds 1..10
     python experiments/run_batch.py capture --seeds 1-10 --jobs 5
+    # v3 (4-class) data from the QR world, seeds 13-14 held out as the dev set
+    python experiments/run_batch.py capture --seeds 1-12 --val-seeds 13-14
+        --label qr --classes v3 --vp-keep 2 --vp-keep-empty 4 --out datasets_v3
     # evaluate the three policies on unseen seeds 101..110
     python experiments/run_batch.py eval --seeds 101-110 --jobs 6
 
@@ -117,6 +120,19 @@ def main():
     ap.add_argument("--version", default="R2025a")
     ap.add_argument("--weights", default=str(ROOT / "models_v2/shelfscan_yolov8n.pt"))
     ap.add_argument("--no-rendering", action="store_true")
+    ap.add_argument("--val-seeds", default=None,
+                    help="capture mode: these seeds go to images/val, the rest "
+                         "to images/train (default: random 15%% per frame)")
+    ap.add_argument("--classes", choices=["v2", "v3"], default="v2",
+                    help="capture mode: v2 = the 4 SKUs + slot_empty + "
+                         "blocker; v3 = cardboard_box + label + slot_empty + "
+                         "blocker, for the QR/barcode world")
+    ap.add_argument("--vp-keep", type=int, default=None,
+                    help="capture mode: keep only this many of the four "
+                         "viewpoints per slot, drawn at random")
+    ap.add_argument("--vp-keep-empty", type=int, default=None,
+                    help="capture mode: ... but this many for a slot with no "
+                         "carton, so the rare slot_empty class is not thinned")
     ap.add_argument("--label", choices=["qr", "barcode"], default=None,
                     help="MVP: build the world with machine-readable carton "
                          "labels and let the audit read them")
@@ -136,16 +152,26 @@ def main():
         return eval_seedwise(a)
 
     jobs = []
+    val = set(seeds(a.val_seeds)) if a.val_seeds else set()
     for s in seeds(a.seeds):
         if a.mode == "capture":
-            jobs.append((f"cap{s}", s, "data_capture", {"SHELFSCAN_OUT": a.out}))
+            # Split BY SEED when --val-seeds is given: a seed's 30 slots are
+            # one layout, so splitting frames at random would put near-copies
+            # of the same carton on both sides of the split.
+            env = {"SHELFSCAN_OUT": a.out, "SHELFSCAN_CLASSES": a.classes,
+                   "SHELFSCAN_VP_KEEP": str(a.vp_keep) if a.vp_keep else "",
+                   "SHELFSCAN_VP_KEEP_EMPTY": (str(a.vp_keep_empty)
+                                               if a.vp_keep_empty else ""),
+                   "SHELFSCAN_SPLIT": ("val" if s in val else "train") if val else ""}
+            jobs.append((f"cap{s}", s, "data_capture", env))
         else:
             for pol in a.policies.split(","):
                 jobs.append((f"{pol}_s{s}", s, "shelfscan_audit",
                              {"SHELFSCAN_POLICY": pol, "SHELFSCAN_RESULTS": a.results}))
     print(f"{len(jobs)} runs, {a.jobs} in parallel", flush=True)
     with ThreadPoolExecutor(a.jobs) as ex:
-        rows = list(ex.map(lambda j: run_one(*j, a.timeout, a.version), jobs))
+        rows = list(ex.map(lambda j: run_one(*j, a.timeout, a.version,
+                                             a.no_rendering, a.label), jobs))
     (ROOT / "logs").mkdir(exist_ok=True)
     log = ROOT / f"logs/batch_{a.mode}.csv"
     new = not log.exists()
