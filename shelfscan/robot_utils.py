@@ -16,6 +16,21 @@ CLASSES_V3 = ["cardboard_box", "label", "slot_empty", "blocker"]
 CLASS_SETS = {"v2": CLASSES, "v3": CLASSES_V3}
 
 
+def results_dir(value, root):
+    """Where to write the run's JSON and CSV.
+
+    A RELATIVE SHELFSCAN_RESULTS is resolved against the repo root, not the
+    process's working directory. Webots starts a controller inside its own
+    folder, so `results_v3/qr` used to land in
+    webots/controllers/shelfscan_audit/results_v3/qr - the run itself was fine,
+    it just wrote somewhere nobody looked, and the batch runner reported every
+    seed FAILED because the file was not where it had asked for it."""
+    if not value:
+        return root / "results_v2"
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
 def class_set(name=None):
     """The class list to write labels against. SHELFSCAN_CLASSES selects it;
     the default is the original v2 set, so every existing run is unchanged."""

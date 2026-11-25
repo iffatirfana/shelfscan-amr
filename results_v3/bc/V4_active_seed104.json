@@ -17,9 +17,9 @@
  "caught": 5,
  "detection_rate": 0.8333333333333334,
  "false_alarms": 0,
- "audit_time_s": 484.51,
- "distance_m": 43.65,
- "frames": 56,
+ "audit_time_s": 445.5,
+ "distance_m": 42.15,
+ "frames": 49,
  "weights": "D:/ihacks/shelfscan-amr/models_v3/yolov8n_v3/weights/best.pt",
  "nbv_model": null,
  "nbv_calls": 0,
@@ -40,12 +40,12 @@
   "A": {
    "n_slots": 15,
    "decided": 13,
-   "time_s": 229.06
+   "time_s": 197.22
   },
   "B": {
    "n_slots": 15,
    "decided": 12,
-   "time_s": 255.46
+   "time_s": 248.29
   }
  }
 }

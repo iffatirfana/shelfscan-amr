@@ -80,8 +80,9 @@ from shelfscan.geometry import project_box, visibility_and_side  # noqa: E402
 from shelfscan.hud import Hud, attach as hud_attach              # noqa: E402
 from shelfscan.policies import POLICIES                          # noqa: E402
 from shelfscan import decode as DEC                              # noqa: E402
-from shelfscan.robot_utils import (Driver, Lift, class_set,      # noqa: E402
-                                   content_box, load_layout)
+from shelfscan.robot_utils import (Driver, Lift, class_set,       # noqa: E402
+                                   content_box, load_layout,
+                                   results_dir)
 from shelfscan.scissor import ScissorLinks                       # noqa: E402
 from shelfscan.twin import DigitalTwin                           # noqa: E402
 from shelfscan.types import EMPTY_CLASS, Observation, Status     # noqa: E402
@@ -230,7 +231,7 @@ def true_status(exp, act):
 def main():
     policy = os.environ.get("SHELFSCAN_POLICY", "V4_active")
     weights = os.environ.get("SHELFSCAN_WEIGHTS", str(ROOT / "models/shelfscan_yolov8n.pt"))
-    res_dir = Path(os.environ.get("SHELFSCAN_RESULTS", ROOT / "results_v2"))
+    res_dir = results_dir(os.environ.get("SHELFSCAN_RESULTS"), ROOT)
     res_dir.mkdir(parents=True, exist_ok=True)
 
     layout = load_layout()

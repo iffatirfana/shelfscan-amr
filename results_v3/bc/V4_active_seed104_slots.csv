@@ -1,7 +1,7 @@
 scan_index,slot_id,side,level,bay,size_class,expected,actual,blocker,occluder,true_status,final_status,observed_label,confidence,observations,last_viewpoint,qr_text
 0,S0-2-0,A,2,0,wide_flat,sku_B,sku_B,,,OK,OK,sku_B,1.0,1,center,210410
 1,S0-2-1,A,2,1,tall,sku_B,sku_B,,,OK,OK,sku_B,1.0,1,center,210411
-2,S0-2-2,A,2,2,tall,sku_A,sku_A,,,OK,OK,sku_A,1.0,4,right,110412
+2,S0-2-2,A,2,2,tall,sku_A,sku_A,,,OK,OK,sku_A,1.0,1,center,110412
 3,S0-2-3,A,2,3,small,sku_B,sku_B,,,OK,OK,sku_B,1.0,1,center,210413
 4,S0-2-4,A,2,4,tall,,,,,OK,OK,slot_empty,0.908,1,center,
 5,S0-1-4,A,1,4,small,sku_A,sku_A,,,OK,OK,sku_A,1.0,1,center,110409
@@ -10,12 +10,12 @@ scan_index,slot_id,side,level,bay,size_class,expected,actual,blocker,occluder,tr
 8,S0-1-1,A,1,1,wide_flat,sku_A,sku_A,,,OK,OK,sku_A,1.0,1,center,110406
 9,S0-1-0,A,1,0,tall,sku_B,,pallet,left,EMPTY,UNVERIFIED,,0.0,4,close,
 10,S0-0-0,A,0,0,medium,sku_B,sku_B,,,OK,OK,sku_B,1.0,1,center,210400
-11,S0-0-1,A,0,1,large,sku_B,sku_D,,,MISPLACED,MISPLACED,sku_D,1.0,3,left,410401
+11,S0-0-1,A,0,1,large,sku_B,sku_D,,,MISPLACED,MISPLACED,sku_D,1.0,1,center,410401
 12,S0-0-2,A,0,2,tall,sku_B,sku_B,,,OK,OK,sku_B,1.0,3,left,210402
 13,S0-0-3,A,0,3,medium,,sku_A,,,MISPLACED,MISPLACED,sku_A,1.0,1,center,110403
 14,S0-0-4,A,0,4,tall,sku_A,,,,EMPTY,EMPTY,slot_empty,0.942,1,center,
 15,S1-2-0,B,2,0,wide_flat,sku_B,sku_B,carton,left,OK,UNVERIFIED,,0.0,4,close,
-16,S1-2-1,B,2,1,large,sku_B,sku_B,,,OK,OK,sku_B,1.0,4,right,210426
+16,S1-2-1,B,2,1,large,sku_B,sku_B,,,OK,OK,sku_B,1.0,2,close,210426
 17,S1-2-2,B,2,2,tall,sku_A,sku_B,carton,left,MISPLACED,MISPLACED,sku_B,1.0,2,right,210427
 18,S1-2-3,B,2,3,small,sku_C,sku_C,,,OK,OK,sku_C,1.0,1,center,310428
 19,S1-2-4,B,2,4,medium,sku_C,sku_C,carton,left,OK,UNVERIFIED,,0.0,4,close,

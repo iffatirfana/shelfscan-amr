@@ -1,10 +1,12 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from shelfscan.reasoning import classify               # noqa: E402
+from shelfscan.robot_utils import results_dir          # noqa: E402
 from shelfscan.twin import DigitalTwin                 # noqa: E402
 from shelfscan.types import EMPTY_CLASS, Observation, Status  # noqa: E402
 from shelfscan.viewpoint import choose_viewpoint       # noqa: E402
@@ -83,6 +85,28 @@ class TestViewpoint(unittest.TestCase):
             tried.append(vp)
             seen.append(vp)
         self.assertEqual(set(seen), {"left", "right", "close"})
+
+
+class TestResultsDir(unittest.TestCase):
+    """Webots runs a controller from the controller's OWN folder, so a relative
+    SHELFSCAN_RESULTS resolved against the working directory lands nowhere the
+    caller looks - a whole batch reports FAILED while every run actually
+    succeeded. It is resolved against the repo root instead."""
+
+    ROOT = Path("/repo")
+
+    def test_a_relative_path_hangs_off_the_repo_root(self):
+        self.assertEqual(results_dir("results_v3/qr", self.ROOT),
+                         self.ROOT / "results_v3/qr")
+
+    def test_an_absolute_path_is_left_alone(self):
+        p = Path(tempfile.gettempdir()).resolve() / "elsewhere"
+        self.assertEqual(results_dir(str(p), self.ROOT), p)
+
+    def test_unset_and_empty_both_give_the_v2_default(self):
+        for value in (None, ""):
+            self.assertEqual(results_dir(value, self.ROOT),
+                             self.ROOT / "results_v2")
 
 
 if __name__ == "__main__":
