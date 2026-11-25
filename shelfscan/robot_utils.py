@@ -38,19 +38,27 @@ def slot_matches(slot, only):
     raise ValueError(f"unknown capture subset {only!r}")
 
 
-def results_dir(value, root):
-    """Where to write the run's JSON and CSV.
+def under_root(value, root, default):
+    """Resolve an output path from the environment against the REPO ROOT.
 
-    A RELATIVE SHELFSCAN_RESULTS is resolved against the repo root, not the
-    process's working directory. Webots starts a controller inside its own
-    folder, so `results_v3/qr` used to land in
-    webots/controllers/shelfscan_audit/results_v3/qr - the run itself was fine,
-    it just wrote somewhere nobody looked, and the batch runner reported every
-    seed FAILED because the file was not where it had asked for it."""
+    Webots starts a controller with its working directory set to the
+    controller's OWN folder, so a relative path from the caller lands under
+    webots/controllers/<name>/ instead of where the caller meant. It has
+    bitten twice: --results results_v3/qr wrote the eval JSON to
+    webots/controllers/shelfscan_audit/ and the batch runner reported all
+    twenty seeds FAILED, and --out datasets_v4 wrote 364 captured frames to
+    webots/controllers/data_capture/. Both runs had actually succeeded, and
+    both looked like total failures. An absolute path and an unset value are
+    untouched, so no existing run changes."""
     if not value:
-        return root / "results_v2"
+        return root / default
     path = Path(value)
     return path if path.is_absolute() else root / path
+
+
+def results_dir(value, root):
+    """Where an audit run writes its JSON and CSV."""
+    return under_root(value, root, "results_v2")
 
 
 def class_set(name=None):

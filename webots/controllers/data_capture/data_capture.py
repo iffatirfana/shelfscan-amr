@@ -36,10 +36,10 @@ from make_world import PLATE_T, code_plate                      # noqa: E402
 from shelfscan.geometry import project_box, to_yolo, visibility_and_side  # noqa: E402
 from shelfscan.robot_utils import (Driver, Lift,                 # noqa: E402
                                    class_set, content_box, load_layout,
-                                   slot_matches)
+                                   slot_matches, under_root)
 from shelfscan.scissor import ScissorLinks                       # noqa: E402
 
-OUT = Path(os.environ.get("SHELFSCAN_OUT", ROOT / "dataset"))
+OUT = under_root(os.environ.get("SHELFSCAN_OUT"), ROOT, "dataset")
 VIEWPOINTS = ["center", "left", "right", "close"]
 # How much of an EMPTY slot must be visible before it is labelled slot_empty.
 # A carton is labelled down to 0.35 and a plate down to 0.5, but an empty slot

@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from shelfscan.reasoning import classify               # noqa: E402
 from shelfscan.robot_utils import (results_dir,        # noqa: E402
-                                   slot_matches)
+                                   slot_matches, under_root)
 from shelfscan.twin import DigitalTwin                 # noqa: E402
 from shelfscan.types import EMPTY_CLASS, Observation, Status  # noqa: E402
 from shelfscan.viewpoint import choose_viewpoint       # noqa: E402
@@ -108,6 +108,14 @@ class TestResultsDir(unittest.TestCase):
         for value in (None, ""):
             self.assertEqual(results_dir(value, self.ROOT),
                              self.ROOT / "results_v2")
+
+    def test_the_capture_output_dir_resolves_the_same_way(self):
+        """--out datasets_v4 wrote 364 frames under the controller's folder
+        before this was shared, which looked exactly like capturing nothing."""
+        self.assertEqual(under_root("datasets_v4", self.ROOT, "dataset"),
+                         self.ROOT / "datasets_v4")
+        self.assertEqual(under_root(None, self.ROOT, "dataset"),
+                         self.ROOT / "dataset")
 
 class TestSlotMatches(unittest.TestCase):
     """The capture subset predicate. The capture controller and the batch
