@@ -52,6 +52,16 @@ detector sees either. With HUD unset nothing here runs and the run is
 unchanged; experiments/run_batch.py clears HUD for every eval job so an
 exported HUD=1 cannot leak into a measured run.
 
+HUD_DISPLAY=1 (demo recording only) additionally paints the camera frame onto
+an "inset" Display device, with a box round each label region the decoder
+tried - green where a payload came back, amber where none did - and the
+decoded SKU drawn beside it (shelfscan/inset.py). The device exists only in a
+world built by make_world.py --display, so with the flag off the world is
+byte-identical and the controller never looks for it. A Display is a sink:
+nothing reads it back, and the picture is drawn from the frame, boxes and
+codes observe() has already computed, so it cannot change detection, decoding
+or the audit.
+
 SHELFSCAN_NBV_LOG=<path> (dev only, MVP) additionally writes one CSV row per
 CANDIDATE viewpoint at every next-best-view decision, with the features a
 learned picker could use and whether V4 chose that candidate. The hook runs
@@ -73,11 +83,12 @@ sys.path.insert(0, str(ROOT))
 
 import cv2                                                      # noqa: E402
 import numpy as np                                               # noqa: E402
-from controller import Supervisor                                # noqa: E402
+from controller import Display, Supervisor                       # noqa: E402
 from ultralytics import YOLO                                     # noqa: E402
 
 from shelfscan.geometry import project_box, visibility_and_side  # noqa: E402
 from shelfscan.hud import Hud, attach as hud_attach              # noqa: E402
+from shelfscan import inset as INS                                # noqa: E402
 from shelfscan.policies import POLICIES                          # noqa: E402
 from shelfscan import decode as DEC                              # noqa: E402
 from shelfscan.robot_utils import (Driver, Lift, class_set,       # noqa: E402
@@ -115,6 +126,24 @@ IMGSZ = int(os.environ.get("SHELFSCAN_IMGSZ") or TRAIN_IMGSZ[V3])
 # Off by default, and it only prints - no decision reads it.
 DEBUG_BOXES = os.environ.get("SHELFSCAN_DEBUG_BOXES") == "1"
 HUD = os.environ.get("HUD") == "1"
+# HUD_DISPLAY=1 paints the annotated camera frame onto the "inset" Display
+# device, which make_world.py --display adds to the robot. Independent of
+# HUD because the two are decided at different times: the Display has to be
+# IN the world, so it is a world-generation choice, while the text overlay is
+# a controller one. A world built without the device simply has no inset, and
+# the run says so once instead of failing.
+HUD_DISPLAY = os.environ.get("HUD_DISPLAY") == "1"
+# HUD_SCAN_STEPS>0 paints a cyan "SCANNING..." frame to the inset after the
+# detector has boxed the plates and BEFORE the readers run, then holds that
+# many steps so a viewer can see it. There is otherwise no such moment to
+# film: detection and decoding both finish inside one observe() call, on one
+# captured frame, and the Display only reaches the screen on a step - so a
+# pending frame painted without a hold is overwritten before it is ever
+# drawn. Holding costs SIMULATED TIME, exactly as the HUD hold does, which
+# is why it defaults to 0: at 0 nothing is painted, nothing is stepped and
+# audit_time_s is unchanged. Decoding reads the frame captured earlier, so
+# even with a hold no decision can differ - only the clock.
+HUD_SCAN_STEPS = int(os.environ.get("HUD_SCAN_STEPS", "0"))
 HUD_HOLD_STEPS = int(os.environ.get("HUD_HOLD_STEPS", "20"))
 # HUD_SHOTS=<dir> saves the 3D view, overlay and all, at each decided slot.
 # Needs rendering on (run_webots.py --no-minimize, no --no-rendering).
@@ -291,6 +320,16 @@ def main():
                   hold_steps=HUD_HOLD_STEPS, step_fn=hud_step, shot_fn=shot_fn)
         hud_attach(twin, hud)
 
+    # ---- camera inset (HUD_DISPLAY=1) -------------------------------------
+    # A Display is a sink: the controller writes to it and nothing reads it
+    # back, so painting it cannot reach the detector, the decoders or the
+    # twin. getDevice returns None when the world was built without
+    # --display, which is the common case and not an error.
+    inset = robot.getDevice("inset") if HUD_DISPLAY else None
+    if HUD_DISPLAY and inset is None:
+        print("hud: HUD_DISPLAY=1 but this world has no 'inset' Display - "
+              "rebuild it with make_world.py --display", flush=True)
+
     # ---- next-best-view decision logging (dev only) -----------------------
     nbv_path = os.environ.get("SHELFSCAN_NBV_LOG")
     nbv_rows = []
@@ -377,6 +416,15 @@ def main():
         boxes = [(tuple(b.xyxy[0].tolist()), CLASSES[int(b.cls)], float(b.conf))
                  for b in det.boxes]
 
+        if inset is not None and HUD_SCAN_STEPS:
+            # Recording only, and never during an eval: run_batch clears
+            # HUD_DISPLAY, and this needs it as well as its own step count.
+            INS.show(inset, Display.BGRA, img, boxes, (), code_sku,
+                     pending=True)
+            for _ in range(HUD_SCAN_STEPS):
+                robot.step(step)
+                lift.tick()
+
         o9 = cam_node.getOrientation()
         rot = [o9[0:3], o9[3:6], o9[6:9]]
         cam_pos = cam_node.getPosition()
@@ -387,6 +435,7 @@ def main():
 
         # ---- QR pass: map every code in this frame onto a slot ------------
         qr_here = {}
+        codes = []          # also read by the HUD_DISPLAY inset, below
         if LABEL:
             level_ids = [i for i in order if slots[i]["rack"] == s["rack"]
                          and slots[i]["level"] == s["level"]]
@@ -414,6 +463,12 @@ def main():
         if hud:
             _txt, _sku = qr_here.get(sid, (None, None))
             hud.detection(boxes, _txt, _sku)
+
+        if inset is not None:
+            # The frame the detector actually ran on, the boxes it returned and
+            # the codes already decoded from it - nothing is re-detected or
+            # re-decoded for the picture.
+            INS.show(inset, Display.BGRA, img, boxes, codes, code_sku)
 
         sb = slot_boxes[sid] if LABEL else slot_box(s)
         if sb is None:

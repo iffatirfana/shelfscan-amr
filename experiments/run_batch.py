@@ -83,9 +83,12 @@ def eval_seedwise(a):
                   "SHELFSCAN_LABEL": a.label or "",
                   "SHELFSCAN_NBV_LOG": a.nbv_log or "",
                   "SHELFSCAN_NBV_MODEL": a.nbv_model or "",
-                  # a measured run is never recorded: clear HUD explicitly so
-                  # an exported HUD=1 in the shell cannot reach the controller
-                  "HUD": ""}) for p in pols]
+                  # a measured run is never recorded: clear both overlay
+                  # flags explicitly so an exported HUD=1 / HUD_DISPLAY=1 in
+                  # the shell cannot reach the controller. The worlds built
+                  # here never carry the Display device either, because wbt()
+                  # is called without display=True.
+                  "HUD": "", "HUD_DISPLAY": ""}) for p in pols]
         t0 = time.time()
         with ThreadPoolExecutor(len(jobs)) as ex:
             list(ex.map(lambda j: run_one(*j, a.timeout, a.version,
@@ -197,7 +200,7 @@ def main():
                               "SHELFSCAN_WEIGHTS": a.weights,
                               "SHELFSCAN_CLASSES": a.classes,
                               "SHELFSCAN_LABEL": a.label or "",
-                              "HUD": ""}))
+                              "HUD": "", "HUD_DISPLAY": ""}))
     print(f"{len(jobs)} runs, {a.jobs} in parallel", flush=True)
     with ThreadPoolExecutor(a.jobs) as ex:
         rows = list(ex.map(lambda j: run_one(*j, a.timeout, a.version,

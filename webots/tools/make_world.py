@@ -24,6 +24,7 @@ offline. Targets Webots R2025a on Windows.
 import argparse
 import json
 import math
+import os
 import random
 import sys
 from pathlib import Path
@@ -114,6 +115,10 @@ CAM_AIM = 0.26     # camera height above the deck top of the level it scans
 CAM_LEVEL_Z = tuple(round(z + CAM_AIM, 4) for z in LEVEL_Z)          # .56 1.21 1.86
 LIFT_POS = tuple(round(z - CAM_LEVEL_Z[0], 4) for z in CAM_LEVEL_Z)  # 0 .65 1.30
 CAM_Z = CAM_LEVEL_Z[0]             # camera height with the lift fully down
+# Camera frame size. Named because the optional recording Display (see
+# robot_node's `display`) has to match it exactly: the controller pastes the
+# camera frame onto that Display unresampled, and a mismatch would crop it.
+CAM_W, CAM_H = 640, 480
 ROW_Y = (0.0, round(SHELF_DEPTH + AISLE_W, 4))   # rack centre y of each row
 RACK_LABEL = ("A", "B")
 AISLE_MID_Y = round((SHELF_DEPTH / 2 + ROW_Y[1] - SHELF_DEPTH / 2) / 2, 4)
@@ -525,8 +530,14 @@ def _building():
     return out
 
 
-def robot_node(x0, y0, yaw, controller):
+def robot_node(x0, y0, yaw, controller, display=False):
     """Scissor-lift AMR built from base nodes only.
+
+    `display` adds a Display device named "inset" for the demo recording
+    (HUD_DISPLAY=1): the controller paints the annotated camera frame onto it
+    so a viewer sees the decode as it happens. It is a sink - nothing reads
+    it, and no sensor, mass or dimension changes - and with it False the
+    emitted node is byte-for-byte what it was before the device existed.
 
     PHYSICS IS UNCHANGED from the previous world: the drive train is still
     TurtleBot3 Burger geometry (wheel r = 0.033 m, track 0.160 m) so
@@ -644,9 +655,14 @@ def robot_node(x0, y0, yaw, controller):
             f'children [ Shape {{ appearance {_app("BOT_DARK")} '
             f'geometry Cylinder {{ height 0.008 radius 0.016 }} }} ] }}')
     carriage.append(
-        'DEF CAM Camera { name "camera" translation 0.05 0 0 width 640 '
-        'height 480 fieldOfView 1.0 '
-        'recognition Recognition { maxRange 4 frameThickness 0 } }')
+        f'DEF CAM Camera {{ name "camera" translation 0.05 0 0 width {CAM_W} '
+        f'height {CAM_H} fieldOfView 1.0 '
+        f'recognition Recognition {{ maxRange 4 frameThickness 0 }} }}')
+    # Recording-only sink, outside the lift so it carries no mass and cannot
+    # perturb the carriage. Empty string when off, including the leading
+    # space, so the robot node is unchanged byte for byte.
+    disp = (f' DEF INSET Display {{ name "inset" '
+            f'width {CAM_W} height {CAM_H} }}') if display else ''
     lift = (f'SliderJoint {{ jointParameters JointParameters {{ axis 0 0 1 }} '
             f'device [ LinearMotor {{ name "lift" minPosition 0 '
             f'maxPosition {LIFT_POS[-1]} maxForce 300 maxVelocity 0.35 }} ] '
@@ -659,7 +675,7 @@ def robot_node(x0, y0, yaw, controller):
             f'supervisor TRUE children [ {" ".join(body)} '
             f'{wheel("left", 0.08)} {wheel("right", -0.08)} '
             f'{caster("front caster", 0.07)} {caster("rear caster", -0.07)} '
-            f'GPS {{ name "gps" }} InertialUnit {{ name "imu" }} {lift} ] '
+            f'GPS {{ name "gps" }} InertialUnit {{ name "imu" }} {lift}{disp} ] '
             f'boundingObject Pose {{ translation 0 0 0.055 children [ '
             f'Cylinder {{ height 0.08 radius 0.09 }} ] }} '
             f'physics Physics {{ density -1 mass 1.0 }} }}')
@@ -728,7 +744,49 @@ def write_code_images(layout, worlds_dir=None, px=640):
     return n
 
 
-def wbt(layout, version, controller="shelfscan_audit"):
+# Where Webots puts each device overlay in the 3D view, as
+# "<robot>:<device>;<visible>;<scale>;<x>;<y>" with x/y as fractions of the
+# view. Webots defaults every overlay to 0;0, so the camera and the inset land
+# exactly on top of one another and the camera - created first - wins: the
+# inset is painted every frame and never seen. Putting the inset on the right
+# half shows the raw feed and the annotated one side by side, and clears the
+# HUD text panel, which starts at y = 0.655.
+OVERLAYS = ("shelfscan:camera;1;1;0;0", "shelfscan:inset;1;1;0.5;0")
+PERSP_KEY = "renderingDevicePerspectives: "
+
+
+def write_overlay_perspective(world_path, overlays=OVERLAYS,
+                              version="R2025a"):
+    """Point the sibling .wbproj at `overlays`, keeping every other setting.
+
+    Webots stores per-world GUI state in .<world>.wbproj and rewrites it on
+    exit. Only the overlay lines are replaced, so a tuned viewpoint or console
+    layout survives; a file that does not exist yet is created with just the
+    header and those lines, which Webots accepts and then fills in.
+
+    Called only for a --display build, so an ordinary world's saved GUI state
+    is never touched."""
+    proj = Path(world_path).parent / f".{Path(world_path).stem}.wbproj"
+    lines = (proj.read_text().splitlines()
+             if proj.exists() else [f"Webots Project File version {version}"])
+    kept = [ln for ln in lines if not ln.startswith(PERSP_KEY)]
+    text = "\n".join(kept + [PERSP_KEY + o for o in overlays]) + "\n"
+    if proj.exists():
+        # NOT write_text: a dot-file Webots created on Windows carries the
+        # hidden attribute, and opening it with CREATE_ALWAYS - which is what
+        # write_text does - fails with PermissionError unless the same
+        # attribute is passed back. Truncating an already-open handle keeps
+        # the attribute and works on both platforms.
+        with proj.open("r+", encoding="utf-8") as f:
+            f.seek(0)
+            f.write(text)
+            f.truncate()
+    else:
+        proj.write_text(text, encoding="utf-8")
+    return proj
+
+
+def wbt(layout, version, controller="shelfscan_audit", display=False):
     _SEEN.clear()
     if layout.get("label"):
         write_code_images(layout)
@@ -791,7 +849,7 @@ def wbt(layout, version, controller="shelfscan_audit"):
         # marker node used only for ground-truth lookup by the offline tools
         a(f'DEF SLOT_{n} Pose {{ translation {s["x"]} {s["y"]} {s["z"]} }}')
     x0, y0, yaw = layout["start_pose"]
-    a(robot_node(x0, y0, yaw, controller))
+    a(robot_node(x0, y0, yaw, controller, display))
     return "\n".join(L) + "\n"
 
 
@@ -805,12 +863,21 @@ def main():
                     help="put a machine-readable code on each carton label "
                          "instead of the printed SKU pattern (MVP)")
     ap.add_argument("--qr", action="store_true", help="shorthand for --label qr")
+    # Recording only. The env default is read HERE rather than in wbt(), so an
+    # exported HUD_DISPLAY=1 cannot reach the worlds experiments/run_batch.py
+    # builds for a measured run - it calls wbt() directly and never passes it.
+    ap.add_argument("--display", action="store_true",
+                    default=os.environ.get("HUD_DISPLAY") == "1",
+                    help="add the 'inset' Display device the controller paints "
+                         "the annotated camera frame onto (HUD_DISPLAY=1). Off "
+                         "by default; the world is unchanged without it.")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     lay = make(a.seed, label=a.label or ("qr" if a.qr else None))
     (out / "layout.json").write_text(json.dumps(lay, indent=1))
-    (out / "warehouse.wbt").write_text(wbt(lay, a.version, a.controller))
+    (out / "warehouse.wbt").write_text(
+        wbt(lay, a.version, a.controller, a.display))
     cls, sku, blk = {}, {}, {}
     for s in lay["slots"].values():
         cls[s["size_class"]] = cls.get(s["size_class"], 0) + 1
@@ -821,6 +888,11 @@ def main():
     print("  size classes: " + ", ".join(f"{k}={v}" for k, v in sorted(cls.items())))
     print("  true content: " + ", ".join(f"{k}={v}" for k, v in sorted(sku.items())))
     print("  blockers:     " + ", ".join(f"{k}={v}" for k, v in sorted(blk.items())))
+    if a.display:
+        proj = write_overlay_perspective(out / "warehouse.wbt",
+                                         version=a.version)
+        print(f"  + 'inset' Display {CAM_W}x{CAM_H} (HUD_DISPLAY recording)")
+        print(f"  + overlay layout -> {proj} (inset on the right half)")
     print("  levels (deck top / camera z / lift): " + ", ".join(
         f"L{i}: {LEVEL_Z[i]} / {CAM_LEVEL_Z[i]} / {LIFT_POS[i]}" for i in range(LEVELS)))
 
