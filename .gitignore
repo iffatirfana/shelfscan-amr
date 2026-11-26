@@ -27,3 +27,10 @@ webots/worlds/layout_bc.json
 /docs/hud_shots/
 /datasets_v4/
 /models_v4/
+
+# Per-run generated worlds: run_batch.py writes one _layout_<tag>.json and
+# _run_<tag>.wbt per seed and normally removes them, but an interrupted or
+# killed run (a HUD recording, a debug seed) leaves them behind. They are
+# regenerated deterministically by webots/tools/make_world.py from the seed.
+webots/worlds/_layout_*.json
+webots/worlds/_run_*.wbt
