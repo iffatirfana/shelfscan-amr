@@ -149,6 +149,63 @@ class TestOverlayItems(unittest.TestCase):
         self.assertEqual(I.overlay_items([], [], sku_of), [])
 
 
+class TestLabelTypeParity(unittest.TestCase):
+    """Code128 cartons must be drawn exactly as QR cartons are.
+
+    The two label types reach the overlay by different routes - a QR payload
+    spells the SKU out, a Code128 one is six digits because it has a tenth of
+    the modules to spend - so the module is pinned as label-type blind: it is
+    given boxes and payloads and never asked which kind they are."""
+
+    QR = "SKU=sku_C;INV=INV-013-07"
+    BC = "301307"                     # sku_3, seed 013, slot 07
+
+    @staticmethod
+    def code_sku(text):
+        """The controller's rule, which cannot be imported without Webots."""
+        text = (text or "").strip()
+        skus = ["sku_A", "sku_B", "sku_C", "sku_D"]
+        if text.isdigit() and len(text) == 6:
+            i = int(text[0]) - 1
+            return skus[i] if 0 <= i < 4 else None
+        for part in text.split(";"):
+            k, _, v = part.partition("=")
+            if k.strip().upper() == "SKU" and v.strip() in skus:
+                return v.strip()
+        return None
+
+    def test_both_payload_forms_caption_to_the_same_sku(self):
+        self.assertEqual(I.caption(self.QR, self.code_sku), "SKU_3")
+        self.assertEqual(I.caption(self.BC, self.code_sku), "SKU_3")
+
+    def test_a_decoded_barcode_is_green_exactly_like_a_decoded_qr(self):
+        boxes = [(PLATE, "label", 0.9)]
+        qr = I.overlay_items(boxes, [(self.QR, centre(PLATE))], self.code_sku)
+        bc = I.overlay_items(boxes, [(self.BC, centre(PLATE))], self.code_sku)
+        self.assertEqual(qr, bc)
+        self.assertEqual(bc, [(PLATE, I.GREEN, "SKU_3")])
+
+    def test_an_unread_barcode_fails_exactly_like_an_unread_qr(self):
+        boxes = [(PLATE, "label", 0.9)]
+        self.assertEqual(I.overlay_items(boxes, [], self.code_sku),
+                         [(PLATE, I.FAIL, I.FAIL_TEXT)])
+
+    def test_the_module_never_branches_on_label_type(self):
+        """The one guarantee behind the parity: if this module cannot tell a
+        QR frame from a Code128 one, it cannot treat them differently."""
+        import inspect
+        src = inspect.getsource(I)
+        for banned in ("label_type", '"qr"', "'qr'", "barcode", "Code128"):
+            self.assertNotIn(banned, src, f"inset.py must not mention {banned}")
+
+    def test_the_barcode_whole_frame_fallback_is_drawn_too(self):
+        """Code128 leans on the whole-frame reader far more than QR does, and
+        those reads carry the code's own centre, not a detected box."""
+        items = I.overlay_items([], [(self.BC, (320.0, 240.0))], self.code_sku)
+        self.assertEqual(items, [((320.0, 240.0, 320.0, 240.0), I.GREEN,
+                                  "SKU_3")])
+
+
 class TestScanningState(unittest.TestCase):
     """The in-between picture: a plate is boxed, the readers have not answered.
 

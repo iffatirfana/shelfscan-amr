@@ -12,7 +12,7 @@ from a better viewpoint (active verification).
 ## The simulated warehouse
 
 A narrow aisle between **two tall racking rows facing each other**, 3 levels x 5
-bays on each side = **30 slots per seed**. Blue uprights, orange beams, concrete
+bays on each side = **30 slots per seed**. Galvanised steel uprights and beams, concrete
 floor with a yellow lane line, steel-truss ceiling.
 
 - **Contents are plain cardboard cartons** in five size classes (small, medium,

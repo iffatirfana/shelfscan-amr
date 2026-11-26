@@ -114,18 +114,31 @@ class OverlayPerspectiveTests(unittest.TestCase):
     the inset and the annotated frame is painted every step and never seen -
     which is what the first recording actually showed."""
 
-    def test_the_inset_is_not_on_top_of_the_camera(self):
-        pos = {}
+    @staticmethod
+    def _parse():
+        out = {}
         for o in OVERLAYS:
             dev, rest = o.split(";", 1)
-            pos[dev.split(":")[1]] = tuple(rest.split(";")[2:])
-        self.assertIn("camera", pos)
-        self.assertIn("inset", pos)
-        self.assertNotEqual(pos["camera"], pos["inset"])
+            f = rest.split(";")
+            out[dev.split(":")[1]] = (f[0] == "1", (f[2], f[3]))
+        return out
 
-    def test_both_overlays_are_visible(self):
-        for o in OVERLAYS:
-            self.assertEqual(o.split(";")[1], "1", o)
+    def test_no_two_visible_overlays_share_a_position(self):
+        """Webots defaults every overlay to 0;0 and draws them stacked, so two
+        visible ones at the same spot means the lower is painted and never
+        seen - which is what the first recording did."""
+        seen = [p for vis, p in self._parse().values() if vis]
+        self.assertEqual(len(seen), len(set(seen)), OVERLAYS)
+
+    def test_the_annotated_inset_is_the_visible_one(self):
+        """A Camera overlay is rendered by Webots from the sensor and cannot
+        be drawn on, so showing it beside the inset puts an un-boxed copy of
+        the same QR next to a boxed one. The inset carries the same frame plus
+        the boxes, so it is the one that is shown."""
+        p = self._parse()
+        self.assertTrue(p["inset"][0], "the inset must be visible")
+        self.assertFalse(p["camera"][0],
+                         "the raw camera overlay cannot carry the boxes")
 
     def test_the_inset_clears_the_hud_text_panel(self):
         """shelfscan.hud puts its panel at y = 0.655 and the overlay is 480 of
@@ -163,7 +176,8 @@ class OverlayPerspectiveTests(unittest.TestCase):
             self.assertIn("maximizedDockId: -1", text)
             self.assertIn("orthographicViewHeight: 1", text)
             self.assertEqual(text.count(PERSP_KEY), len(OVERLAYS))
-            self.assertIn(PERSP_KEY + "shelfscan:inset;1;1;0.5;0", text)
+            for o in OVERLAYS:
+                self.assertIn(PERSP_KEY + o, text)
 
 
 class AggregateTests(unittest.TestCase):

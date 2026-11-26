@@ -277,8 +277,12 @@ PALETTE = {
     "LANE_YELLOW":  (0.90, 0.74, 0.10, 0.70, 0.0, None),
     "CEILING":      (0.80, 0.80, 0.82, 0.90, 0.0, None),
     "TRUSS_STEEL":  (0.52, 0.54, 0.57, 0.45, 0.7, None),
-    "RACK_BLUE":    (0.09, 0.24, 0.60, 0.55, 0.25, None),
-    "RACK_ORANGE":  (0.93, 0.42, 0.08, 0.50, 0.25, None),
+    # Galvanised pallet racking, not the old orange-and-blue scheme. The
+    # upright is the darker, duller section and the beam the brighter rolled
+    # one, so the frame still reads as structure rather than one flat grey
+    # mass - which matters for the camera as well as for a viewer.
+    "RACK_UPRIGHT": (0.46, 0.48, 0.51, 0.45, 0.75, None),
+    "RACK_BEAM":    (0.66, 0.68, 0.71, 0.35, 0.80, None),
     "DECK_STEEL":   (0.58, 0.58, 0.60, 0.60, 0.30, None),
     "RACK_MESH":    (0.28, 0.29, 0.32, 0.80, 0.20, None),
     "CARD_TAPE":    (0.45, 0.33, 0.21, 0.75, 0.0, None),
@@ -477,8 +481,17 @@ def _pallet_children(px, py):
 
 
 def _standing_pallet_children():
-    """A pallet stood on edge at the bay mouth. Local +y faces the aisle."""
-    out = []
+    """A pallet stood on edge at the bay mouth. Local +y faces the aisle.
+
+    The deck board behind the slats is what stops this reading as a
+    checkerboard. Three bearers crossed with five top boards is the real
+    construction, but seen head-on from the aisle the gaps between them
+    alternate with the boards into a regular light/dark grid - a texture that
+    looks like a placeholder, not like timber. A solid board closing the back
+    leaves the slat relief visible while the holes stop punching through to
+    the bay behind, so it reads as plain wood. Geometry only: the material is
+    the same WOOD_PALLET it always was."""
+    out = [_box(_app("WOOD_PALLET"), 0.45, 0.022, 0.55, 0, -0.030, 0)]
     for dx in (0.0, 0.19, -0.19):
         out.append(_box(_app("WOOD_PALLET"), 0.05, 0.08, 0.55, dx, 0, 0))
     for dz in (-0.22, -0.11, 0.0, 0.11, 0.22):
@@ -494,11 +507,11 @@ def _racking(r):
     for k in range(BAYS + 1):                                     # uprights
         xp = -BAY_W / 2 + k * BAY_W
         for dy in (SHELF_DEPTH / 2 - 0.035, -(SHELF_DEPTH / 2 - 0.035)):
-            kids.append(_box(_app("RACK_BLUE"), 0.07, 0.07, RACK_H,
+            kids.append(_box(_app("RACK_UPRIGHT"), 0.07, 0.07, RACK_H,
                              xp, dy, RACK_H / 2))
     for z in list(LEVEL_Z) + [RACK_H - 0.05]:                     # beams
         for dy in (SHELF_DEPTH / 2 - 0.04, -(SHELF_DEPTH / 2 - 0.04)):
-            kids.append(_box(_app("RACK_ORANGE"), run, 0.08, 0.10,
+            kids.append(_box(_app("RACK_BEAM"), run, 0.08, 0.10,
                              xc, dy, z - 0.05))
     for z in LEVEL_Z:                                             # decks, backs
         for k in range(BAYS):
@@ -746,12 +759,18 @@ def write_code_images(layout, worlds_dir=None, px=640):
 
 # Where Webots puts each device overlay in the 3D view, as
 # "<robot>:<device>;<visible>;<scale>;<x>;<y>" with x/y as fractions of the
-# view. Webots defaults every overlay to 0;0, so the camera and the inset land
-# exactly on top of one another and the camera - created first - wins: the
-# inset is painted every frame and never seen. Putting the inset on the right
-# half shows the raw feed and the annotated one side by side, and clears the
-# HUD text panel, which starts at y = 0.655.
-OVERLAYS = ("shelfscan:camera;1;1;0;0", "shelfscan:inset;1;1;0.5;0")
+# view.
+#
+# The raw camera overlay is turned OFF and the inset takes its place. Webots
+# renders a Camera overlay straight from the sensor and exposes no way to draw
+# on it, so that panel can never carry the detection box - it showed a QR with
+# nothing round it next to an inset showing the same QR boxed and decoded,
+# which reads as the detector having missed it. The inset is the same frame
+# with the boxes added, so dropping the raw one loses no information.
+#
+# Left at 0;0 it also clears the HUD text panel: 480 of a 747-pixel view ends
+# at 0.643 and the panel starts at 0.655.
+OVERLAYS = ("shelfscan:camera;0;1;0;0", "shelfscan:inset;1;1;0;0")
 PERSP_KEY = "renderingDevicePerspectives: "
 
 
