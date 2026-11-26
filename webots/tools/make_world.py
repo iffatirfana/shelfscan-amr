@@ -277,12 +277,13 @@ PALETTE = {
     "LANE_YELLOW":  (0.90, 0.74, 0.10, 0.70, 0.0, None),
     "CEILING":      (0.80, 0.80, 0.82, 0.90, 0.0, None),
     "TRUSS_STEEL":  (0.52, 0.54, 0.57, 0.45, 0.7, None),
-    # Galvanised pallet racking, not the old orange-and-blue scheme. The
-    # upright is the darker, duller section and the beam the brighter rolled
-    # one, so the frame still reads as structure rather than one flat grey
-    # mass - which matters for the camera as well as for a viewer.
-    "RACK_UPRIGHT": (0.46, 0.48, 0.51, 0.45, 0.75, None),
-    "RACK_BEAM":    (0.66, 0.68, 0.71, 0.35, 0.80, None),
+    # The racking the DETECTOR was trained on: blue uprights, orange beams.
+    # Named for the section rather than the colour because --demo repaints
+    # them (see DEMO_PALETTE) and a name like RACK_BLUE would then be lying.
+    # These values are load-bearing for accuracy, not decoration - every
+    # training frame in datasets_v4 was captured against them.
+    "RACK_UPRIGHT": (0.09, 0.24, 0.60, 0.55, 0.25, None),
+    "RACK_BEAM":    (0.93, 0.42, 0.08, 0.50, 0.25, None),
     "DECK_STEEL":   (0.58, 0.58, 0.60, 0.60, 0.30, None),
     "RACK_MESH":    (0.28, 0.29, 0.32, 0.80, 0.20, None),
     "CARD_TAPE":    (0.45, 0.33, 0.21, 0.75, 0.0, None),
@@ -295,16 +296,40 @@ PALETTE = {
     "BOT_STEEL":    (0.47, 0.48, 0.50, 0.35, 0.80, None),
     "BOT_LED":      (1.00, 1.00, 1.00, 0.25, 0.0, (1.0, 1.0, 1.0)),
 }
+
+# Overrides applied ONLY in demo mode (--demo / wbt(demo=True)), which is the
+# recording build. Galvanised pallet racking looks like a warehouse; the
+# orange-and-blue above looks like a toy. But the v4 detector was trained on
+# frames captured against the orange-and-blue world, so repainting the racking
+# changes its input: on seeds 101-104 it moved 103 S1-0-1 from UNVERIFIED to
+# EMPTY at conf 0.71 on a bay that really holds sku_B, turning "I don't know"
+# into a confident wrong answer. That is why this is a gate and not a change.
+# Measured runs never set it (experiments/run_batch.py calls wbt() with three
+# positional arguments and no keywords), so eval always sees PALETTE.
+# See docs/MVP_DETECTOR_V3_V4.md.
+DEMO_PALETTE = {
+    "RACK_UPRIGHT": (0.46, 0.48, 0.51, 0.45, 0.75, None),
+    "RACK_BEAM":    (0.66, 0.68, 0.71, 0.35, 0.80, None),
+}
+
 _SEEN = set()
+# Demo-visuals flag. Module level for the same reason _SEEN is: the appearance
+# and geometry helpers are called from a dozen places deep inside wbt(), and
+# wbt() is the one function that resets both. Nothing else writes it.
+_DEMO = False
 
 
 def _app(name):
     """DEF an appearance on first use, USE it afterwards. Must be called at
-    every use site - caching the returned string would emit duplicate DEFs."""
+    every use site - caching the returned string would emit duplicate DEFs.
+
+    The DEF name is the same in both modes - only the baseColor differs - so
+    a demo world and an eval world differ by exactly the painted values."""
     if name in _SEEN:
         return f"USE {name}"
     _SEEN.add(name)
-    r, g, b, rough, metal, emis = PALETTE[name]
+    src = DEMO_PALETTE if (_DEMO and name in DEMO_PALETTE) else PALETTE
+    r, g, b, rough, metal, emis = src[name]
     e = f" emissiveColor {emis[0]} {emis[1]} {emis[2]}" if emis else ""
     return (f"DEF {name} PBRAppearance {{ baseColor {r:.4f} {g:.4f} {b:.4f} "
             f"roughness {rough} metalness {metal}{e} }}")
@@ -483,15 +508,18 @@ def _pallet_children(px, py):
 def _standing_pallet_children():
     """A pallet stood on edge at the bay mouth. Local +y faces the aisle.
 
-    The deck board behind the slats is what stops this reading as a
-    checkerboard. Three bearers crossed with five top boards is the real
-    construction, but seen head-on from the aisle the gaps between them
-    alternate with the boards into a regular light/dark grid - a texture that
-    looks like a placeholder, not like timber. A solid board closing the back
-    leaves the slat relief visible while the holes stop punching through to
-    the bay behind, so it reads as plain wood. Geometry only: the material is
-    the same WOOD_PALLET it always was."""
-    out = [_box(_app("WOOD_PALLET"), 0.45, 0.022, 0.55, 0, -0.030, 0)]
+    In demo mode a board closes the back. Three bearers crossed with five top
+    boards is the real construction, but seen head-on from the aisle the gaps
+    alternate with the boards into a regular light/dark grid that reads as a
+    placeholder texture rather than timber; a solid board behind keeps the
+    slat relief and stops the holes punching through to the bay behind.
+
+    It is gated with the racking repaint because it is equally an input
+    change: a pallet blocker stands in 25 of the 300 slots of eval seeds
+    101-110, so the board would alter what the detector sees in every one of
+    them. Material is unchanged either way - the same WOOD_PALLET."""
+    out = ([_box(_app("WOOD_PALLET"), 0.45, 0.022, 0.55, 0, -0.030, 0)]
+           if _DEMO else [])
     for dx in (0.0, 0.19, -0.19):
         out.append(_box(_app("WOOD_PALLET"), 0.05, 0.08, 0.55, dx, 0, 0))
     for dz in (-0.22, -0.11, 0.0, 0.11, 0.22):
@@ -805,7 +833,14 @@ def write_overlay_perspective(world_path, overlays=OVERLAYS,
     return proj
 
 
-def wbt(layout, version, controller="shelfscan_audit", display=False):
+def wbt(layout, version, controller="shelfscan_audit", display=False,
+        demo=False):
+    """Render the world text. `demo` turns on the recording-only visuals
+    (DEMO_PALETTE racking, the closed pallet back) - keyword-only in effect,
+    since experiments/run_batch.py passes three positional arguments, so a
+    measured run cannot reach them by accident."""
+    global _DEMO
+    _DEMO = demo
     _SEEN.clear()
     if layout.get("label"):
         write_code_images(layout)
@@ -888,6 +923,15 @@ def main():
                          "gitignored, so a recording world can sit in "
                          "webots/worlds/ - where Webots can find the "
                          "controller - without touching the tracked one.")
+    # Recording only, and deliberately NOT implied by --display: a HUD_DISPLAY
+    # debugging run on an eval seed should still render the world the detector
+    # was trained on. Same env-default-in-main() trick as --display below.
+    ap.add_argument("--demo", action="store_true",
+                    default=os.environ.get("DEMO_VISUALS") == "1",
+                    help="recording visuals: galvanised racking and a closed "
+                         "pallet back (DEMO_VISUALS=1). Off by default - they "
+                         "change what the detector sees, so measured runs "
+                         "must not use them. See DEMO_PALETTE.")
     # Recording only. The env default is read HERE rather than in wbt(), so an
     # exported HUD_DISPLAY=1 cannot reach the worlds experiments/run_batch.py
     # builds for a measured run - it calls wbt() directly and never passes it.
@@ -913,7 +957,7 @@ def main():
     else:
         world, lay_path = out / "warehouse.wbt", out / "layout.json"
     lay_path.write_text(json.dumps(lay, indent=1))
-    world.write_text(wbt(lay, a.version, a.controller, a.display))
+    world.write_text(wbt(lay, a.version, a.controller, a.display, a.demo))
     cls, sku, blk = {}, {}, {}
     for s in lay["slots"].values():
         cls[s["size_class"]] = cls.get(s["size_class"], 0) + 1
@@ -924,10 +968,13 @@ def main():
     print("  size classes: " + ", ".join(f"{k}={v}" for k, v in sorted(cls.items())))
     print("  true content: " + ", ".join(f"{k}={v}" for k, v in sorted(sku.items())))
     print("  blockers:     " + ", ".join(f"{k}={v}" for k, v in sorted(blk.items())))
+    print("  visuals:      " + ("DEMO - galvanised racking, closed pallet "
+                                 "back (NOT for measured runs)" if a.demo
+                                 else "eval - the racking v4 was trained on"))
     if a.display:
         proj = write_overlay_perspective(world, version=a.version)
         print(f"  + 'inset' Display {CAM_W}x{CAM_H} (HUD_DISPLAY recording)")
-        print(f"  + overlay layout -> {proj} (inset on the right half)")
+        print(f"  + overlay layout -> {proj} (inset at 0;0, raw camera overlay off)")
     print("  levels (deck top / camera z / lift): " + ", ".join(
         f"L{i}: {LEVEL_Z[i]} / {CAM_LEVEL_Z[i]} / {LIFT_POS[i]}" for i in range(LEVELS)))
 

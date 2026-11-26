@@ -181,3 +181,42 @@ python experiments/run_batch.py eval --seeds 101-110 --policies V4_active \
 
 30 epochs on 1109 frames at 320 px took 1.11 h on this machine's CPU; there is
 no CUDA GPU here.
+
+## The demo visuals are gated, not applied
+
+v4 is sensitive to the racking it was trained against, which constrains what
+the recording may change. The demo pass of 2026-11-26 repainted the racking
+galvanised grey and closed the back of the bay-mouth pallet. Re-running the
+audit on seeds 101-104 (QR, HUD unset) against the committed v4 results: 119
+of 120 slots identical, 89 of 89 codes decoded identically, 104 of 120 correct
+either way. The one slot that moved was **103 S1-0-1** — a bay really holding
+`sku_B` behind a right-hand carton blocker — UNVERIFIED before, EMPTY at conf
+0.71 after. Accuracy is unchanged, because both answers are wrong, but the
+error got worse in the way this document argues matters most: a slot that
+admitted it did not know now asserts a full bay is empty.
+
+That is the same failure mode as the four false EMPTYs above, and the cause is
+mundane: every training frame in `datasets_v4` was captured against the
+blue-and-orange world, so repainting the racking changes the detector's input.
+A pallet blocker stands in 25 of the 300 slots of seeds 101-110, so the closed
+pallet back is an input change too, and it is gated alongside the paint rather
+than kept.
+
+So both live behind `make_world --demo` / `wbt(demo=True)` (`DEMO_PALETTE`),
+off by default:
+
+- **Measured runs** get the world v4 was trained on. `experiments/run_batch.py`
+  calls `wbt(lay, version, controller)` with three positional arguments, so it
+  cannot reach the flag, and `--demo` is deliberately not implied by
+  `--display` — a `HUD_DISPLAY=1` debugging run on an eval seed still renders
+  the trained-on world.
+- **The recording** gets the better-looking one, built with `--demo`.
+
+Verified by generating seeds 101-110 both ways and comparing the world text:
+the default build is byte-identical to the pre-recolour world the v4 numbers
+were measured on, apart from the two appearance `DEF`s being renamed
+`RACK_BLUE`/`RACK_ORANGE` → `RACK_UPRIGHT`/`RACK_BEAM` (named for the section
+so the names stay honest under either paint), and the `--demo` build is
+byte-identical to what the recolour commit produced. Webots renders from
+`baseColor` and geometry, not `DEF` names, so eval frames are unchanged and
+the 103 S1-0-1 regression cannot occur in a measured run.

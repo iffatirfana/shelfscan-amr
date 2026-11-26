@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "webots/tools"))
 
-from make_world import (CAM_H, CAM_W, CAM_Z, ITEM,  # noqa: E402
-                        LIFT_POS, OVERLAYS, PERSP_KEY, make, robot_node,
-                        wbt, write_overlay_perspective)
+from make_world import (CAM_H, CAM_W, CAM_Z, DEMO_PALETTE, ITEM,  # noqa: E402
+                        LIFT_POS, OVERLAYS, PALETTE, PERSP_KEY, make,
+                        robot_node, wbt, write_overlay_perspective)
 from shelfscan import scissor as sc             # noqa: E402
 from shelfscan.robot_utils import Driver        # noqa: E402
 
@@ -178,6 +178,87 @@ class OverlayPerspectiveTests(unittest.TestCase):
             self.assertEqual(text.count(PERSP_KEY), len(OVERLAYS))
             for o in OVERLAYS:
                 self.assertIn(PERSP_KEY + o, text)
+
+
+class DemoVisualsGateTests(unittest.TestCase):
+    """The recording visuals are gated because they are an INPUT change.
+
+    v4 was trained on frames captured against blue-and-orange racking with an
+    open-backed bay-mouth pallet. Repainting the racking and closing the
+    pallet back changes what the camera sees, and on seeds 101-104 it moved
+    103 S1-0-1 from UNVERIFIED to EMPTY at conf 0.71 on a bay that really
+    holds sku_B - "I don't know" became a confident wrong answer. So the demo
+    world gets them and every measured run gets the world v4 was trained on.
+    """
+
+    def test_the_default_world_is_the_one_v4_was_trained_on(self):
+        """No argument, no env, no keyword: the trained-on colours."""
+        text = wbt(make(1), "R2025a")
+        self.assertIn("baseColor 0.0900 0.2400 0.6000", text)   # blue upright
+        self.assertIn("baseColor 0.9300 0.4200 0.0800", text)   # orange beam
+        for name, (r, g, b, *_) in DEMO_PALETTE.items():
+            self.assertNotIn(f"baseColor {r:.4f} {g:.4f} {b:.4f}", text,
+                             f"{name} demo paint leaked into the eval world")
+
+    def test_demo_repaints_only_the_racking(self):
+        text = wbt(make(1), "R2025a", demo=True)
+        for name, (r, g, b, *_) in DEMO_PALETTE.items():
+            self.assertIn(f"baseColor {r:.4f} {g:.4f} {b:.4f}", text, name)
+        self.assertNotIn("baseColor 0.0900 0.2400 0.6000", text)
+        self.assertNotIn("baseColor 0.9300 0.4200 0.0800", text)
+
+    def test_demo_overrides_name_real_palette_entries(self):
+        """A typo'd override would silently never apply."""
+        for name in DEMO_PALETTE:
+            self.assertIn(name, PALETTE, name)
+
+    def test_the_def_names_are_the_same_in_both_modes(self):
+        """Only the painted value may differ, so the two worlds stay
+        comparable - and the names stay honest in both (RACK_BLUE would be a
+        lie once --demo paints it grey)."""
+        for mode in (False, True):
+            text = wbt(make(1), "R2025a", demo=mode)
+            self.assertIn("DEF RACK_UPRIGHT PBRAppearance", text)
+            self.assertIn("DEF RACK_BEAM PBRAppearance", text)
+            self.assertNotIn("RACK_BLUE", text)
+            self.assertNotIn("RACK_ORANGE", text)
+
+    def test_the_pallet_back_board_is_demo_only(self):
+        """The closed back is gated with the paint: a pallet blocker stands in
+        25 of the 300 slots of seeds 101-110, so it is an input change in
+        every one of them. Seed 101 has 3."""
+        board = 'geometry Box { size 0.4500 0.0220 0.5500 }'
+        self.assertNotIn(board, wbt(make(101, label="qr"), "R2025a"))
+        self.assertIn(board, wbt(make(101, label="qr"), "R2025a", demo=True))
+
+    def test_a_measured_run_cannot_reach_demo_positionally(self):
+        """experiments/run_batch.py calls wbt(lay, version, controller). If
+        demo ever moved ahead of display in the signature, that third
+        argument would start selecting it."""
+        import inspect
+        names = list(inspect.signature(wbt).parameters)
+        self.assertEqual(names[:3], ["layout", "version", "controller"])
+        self.assertGreater(names.index("demo"), 3, names)
+        self.assertIs(inspect.signature(wbt).parameters["demo"].default, False)
+
+    def test_run_batch_builds_worlds_without_demo(self):
+        """The gate is only real if the batch runner does not pass it."""
+        src = (ROOT / "experiments/run_batch.py").read_text(encoding="utf-8")
+        self.assertIn("wbt(lay, version, controller)", src)
+        self.assertNotIn("demo", src)
+
+    def test_the_flag_does_not_leak_between_builds(self):
+        """wbt() owns the module flag the way it owns _SEEN, so a demo build
+        must not colour the next eval build in the same process."""
+        wbt(make(1), "R2025a", demo=True)
+        self.assertIn("baseColor 0.0900 0.2400 0.6000", wbt(make(1), "R2025a"))
+
+    def test_display_does_not_imply_demo(self):
+        """A HUD_DISPLAY debugging run on an eval seed should still render the
+        world the detector was trained on."""
+        text = wbt(make(1), "R2025a", "shelfscan_audit", True)
+        self.assertIn('Display {', text)
+        self.assertIn("baseColor 0.0900 0.2400 0.6000", text)
 
 
 class AggregateTests(unittest.TestCase):
