@@ -407,3 +407,75 @@ class TestReadOnly(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestThreeWindowPipeline(unittest.TestCase):
+    """Tests for the 3-window pipeline: detections, cut crop, and dashboard."""
+
+    def test_draw_detections_draws_boxes_and_banner(self):
+        img = frame()
+        boxes = [(CARTON, "cardboard_box", 0.91), (PLATE, "label", 0.88)]
+        codes = [(PAYLOAD, centre(PLATE))]
+        out = I.draw_detections(img, boxes, codes, sku_of, banner="DETECTOR")
+        self.assertEqual(out.shape, img.shape)
+        self.assertFalse(np.array_equal(out, img))
+        self.assertEqual(int(img.sum()), 0)
+
+    def test_draw_crop_shows_decoded_and_empty_states(self):
+        img = np.full((480, 640, 3), 180, np.uint8)
+        boxes = [(CARTON, "cardboard_box", 0.91), (PLATE, "label", 0.88)]
+        codes = [(PAYLOAD, centre(PLATE))]
+        c1 = I.draw_crop(img, boxes, codes, sku_of, title="CUT QR")
+        self.assertEqual(c1.shape, (260, 320, 3))
+        c2 = I.draw_crop(None, [], (), sku_of, title="CUT CODE128")
+        self.assertEqual(c2.shape, (260, 320, 3))
+
+    def test_draw_dashboard_renders_twin_state(self):
+        from shelfscan.twin import DigitalTwin
+        from shelfscan.types import Observation
+        slots_meta = {
+            "S0-0-0": {"rack": "A", "level": 0, "bay": 0, "expected": "sku_A"},
+            "S0-0-1": {"rack": "A", "level": 0, "bay": 1, "expected": "sku_B"},
+        }
+        twin = DigitalTwin({k: v["expected"] for k, v in slots_meta.items()})
+        st = twin.update(Observation("S0-0-0", "sku_A", 1.0, 1.0, None, "front", 1.0))
+        dash = I.draw_dashboard(
+            slots_meta, twin.slots, slot_id="S0-0-0",
+            decoded_sku="sku_A", status=st, action="Audited")
+        self.assertEqual(dash.shape, (340, 420, 3))
+        self.assertGreater(int(dash.sum()), 0)
+
+
+class TestIdleCard(unittest.TestCase):
+    """A Display is born black and stays black until something pastes to it.
+
+    A world built with --display but run without HUD_DISPLAY=1 therefore shows
+    a permanently black panel that is indistinguishable from a crashed overlay
+    - which is exactly how it was read. The idle card makes that state state
+    its own reason."""
+
+    def test_it_is_not_black(self):
+        """The whole point: a panel that says something, not a dark square."""
+        card = I.idle_card(["INSET IDLE", "HUD_DISPLAY is not set"])
+        self.assertEqual(card.shape, (480, 640, 3))
+        self.assertGreater(int(card.max()), 0)
+        # text is drawn light on dark, so some pixels must be well clear of bg
+        self.assertGreater(int((card > 150).sum()), 500)
+
+    def test_it_matches_the_camera_frame_size(self):
+        """It is pasted to the same 640x480 Display the frames go to, so a
+        mismatch would be cropped by Webots."""
+        self.assertEqual(I.idle_card(["x"]).shape[:2], (480, 640))
+
+    def test_it_pushes_like_any_other_frame(self):
+        d = FakeDisplay()
+        I.push(d, I.idle_card(["INSET IDLE", "second line"]), "BGRA")
+        self.assertEqual(len(d.pasted), 1)
+        data, fmt, w, h = d.last
+        self.assertEqual((fmt, w, h), ("BGRA", 640, 480))
+        self.assertEqual(len(data), 640 * 480 * 4)
+        self.assertEqual(d.live, set(), "image refs must not leak")
+
+    def test_a_long_message_does_not_crash_it(self):
+        card = I.idle_card(["INSET IDLE", "x" * 200])
+        self.assertEqual(card.shape, (480, 640, 3))

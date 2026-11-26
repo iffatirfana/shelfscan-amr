@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "webots/tools"))
 
-from make_world import (CAM_H, CAM_W, CAM_Z, DEMO_PALETTE, ITEM,  # noqa: E402
+from make_world import (CAM_H, CAM_W, CROP_H, CROP_W, DASH_H, DASH_W, CAM_Z, DEMO_PALETTE, ITEM,  # noqa: E402
                         LIFT_POS, OVERLAYS, PALETTE, PERSP_KEY, make,
                         robot_node, wbt, write_overlay_perspective)
 from shelfscan import scissor as sc             # noqa: E402
@@ -73,12 +73,16 @@ class InsetDisplayTests(unittest.TestCase):
         self.assertEqual(wbt(lay, "R2025a"),
                          wbt(lay, "R2025a", "shelfscan_audit", display=False))
 
-    def test_the_flag_adds_exactly_one_display_named_inset(self):
+    def test_the_flag_adds_three_displays_inset_crop_dashboard(self):
         text = wbt(make(13, label="qr"), "R2025a", "shelfscan_audit",
                    display=True)
-        self.assertEqual(text.count("Display"), 1)
+        self.assertEqual(text.count("Display"), 3)
         self.assertIn('DEF INSET Display { name "inset" '
                       f'width {CAM_W} height {CAM_H} }}', text)
+        self.assertIn('DEF CROP Display { name "crop" '
+                      f'width {CROP_W} height {CROP_H} }}', text)
+        self.assertIn('DEF DASHBOARD Display { name "dashboard" '
+                      f'width {DASH_W} height {DASH_H} }}', text)
 
     def test_the_display_matches_the_camera_size(self):
         """The controller pastes the camera frame on unresampled, so a
@@ -88,13 +92,17 @@ class InsetDisplayTests(unittest.TestCase):
         self.assertIn(f'name "camera" translation 0.05 0 0 '
                       f'width {CAM_W} height {CAM_H}', text)
 
-    def test_the_flag_adds_nothing_but_that_node(self):
+    def test_the_flag_adds_nothing_but_those_nodes(self):
         lay = make(13, label="qr")
         off = wbt(lay, "R2025a", "shelfscan_audit", display=False)
         on = wbt(lay, "R2025a", "shelfscan_audit", display=True)
-        node = (f' DEF INSET Display {{ name "inset" '
-                f'width {CAM_W} height {CAM_H} }}')
-        self.assertEqual(on.replace(node, "", 1), off)
+        nodes = (f' DEF INSET Display {{ name "inset" '
+                 f'width {CAM_W} height {CAM_H} }}'
+                 f' DEF CROP Display {{ name "crop" '
+                 f'width {CROP_W} height {CROP_H} }}'
+                 f' DEF DASHBOARD Display {{ name "dashboard" '
+                 f'width {DASH_W} height {DASH_H} }}')
+        self.assertEqual(on.replace(nodes, "", 1), off)
 
     def test_the_display_carries_no_physics_and_no_bounding_object(self):
         """It is a sink. If it had mass or a collision body it could perturb

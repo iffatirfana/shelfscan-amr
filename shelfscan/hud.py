@@ -192,6 +192,7 @@ class Hud:
         self.step_fn = step_fn
         self.font = font
         self.shot_fn = shot_fn    # optional: save a screenshot of the view
+        self._said = False        # one-time "the HUD is drawing" report
         self.seen = {}            # slot_id -> 1-based scan index
         self.prev = None          # slot dict of the previous observation
         self.slot = None
@@ -201,9 +202,13 @@ class Hud:
     # -- drawing ----------------------------------------------------------
     def _put(self, lid, text, colour=None):
         x, y, size, default = LAYOUT[lid]
-        self.robot.setLabel(lid, text, x, y, size,
-                            default if colour is None else colour, 0.0,
-                            self.font)
+        col = default if colour is None else colour
+        self.robot.setLabel(lid, text, x, y, size, col, 0.0, self.font)
+        if not self._said:
+            self._said = True
+            print(f"hud: first setLabel id={lid} at x={x} y={y} size={size} "
+                  f"colour=0x{col:06x} font={self.font!r} text={text!r}",
+                  flush=True)
 
     def begin(self, slot_id, slot):
         """Called as the robot sets off for a slot, before it moves."""

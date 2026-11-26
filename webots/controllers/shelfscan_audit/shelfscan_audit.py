@@ -76,6 +76,7 @@ import json
 import math
 import os
 import sys
+import pathlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -264,6 +265,22 @@ def true_status(exp, act):
 
 
 def main():
+    # ---- what did this process ACTUALLY get? ------------------------------
+    # HUD and HUD_DISPLAY are read the same way (os.environ.get(...) == "1"),
+    # so when one works and the other does not the difference is in what
+    # reached the process, not in how it is read. Printing the raw values -
+    # repr, so "1 " or "" is visible - plus the script actually executing and
+    # its mtime, settles both "is the env arriving" and "is this the patched
+    # file or a stale copy" from the log alone, without another guess.
+    import datetime as _dt
+    _me = pathlib.Path(__file__).resolve()
+    _mt = _dt.datetime.fromtimestamp(_me.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"env: script={_me} mtime={_mt}", flush=True)
+    print("env: " + "  ".join(
+        f"{k}={os.environ.get(k)!r}"
+        for k in ("HUD", "HUD_DISPLAY", "SHELFSCAN_TAG", "SHELFSCAN_RESULTS",
+                  "SHELFSCAN_LABEL")), flush=True)
+
     policy = os.environ.get("SHELFSCAN_POLICY", "V4_active")
     weights = os.environ.get("SHELFSCAN_WEIGHTS", str(ROOT / "models/shelfscan_yolov8n.pt"))
     res_dir = results_dir(os.environ.get("SHELFSCAN_RESULTS"), ROOT)
@@ -326,9 +343,116 @@ def main():
     # twin. getDevice returns None when the world was built without
     # --display, which is the common case and not an error.
     inset = robot.getDevice("inset") if HUD_DISPLAY else None
+    crop_disp = robot.getDevice("crop") if HUD_DISPLAY else None
+    dash_disp = robot.getDevice("dashboard") if HUD_DISPLAY else None
     if HUD_DISPLAY and inset is None:
         print("hud: HUD_DISPLAY=1 but this world has no 'inset' Display - "
               "rebuild it with make_world.py --display", flush=True)
+
+    # The opposite mistake, and the one that LOOKS like a broken overlay: the
+    # world was built with --display, so Webots draws an inset panel, but
+    # HUD_DISPLAY is unset, so nothing ever pastes to it and it stays the
+    # black a Display is born as. Nothing in the log contradicted that, which
+    # is how it reads as "the inset is painting black" rather than "the inset
+    # was never switched on". Say so, and paint the reason onto the panel.
+    # Devices are listed rather than looked up by name so a world WITHOUT the
+    # device - every measured run - triggers no Webots "device not found"
+    # warning on a path that did not exist before.
+    if not HUD_DISPLAY and any(
+            robot.getDeviceByIndex(i).getName() == "inset"
+            for i in range(robot.getNumberOfDevices())):
+        _idle = robot.getDevice("inset")
+        print("hud: this world has an 'inset' Display but HUD_DISPLAY is not "
+              "set, so the panel will stay blank. Relaunch with HUD_DISPLAY=1 "
+              "to paint the annotated camera frame onto it.", flush=True)
+        try:
+            INS.push(_idle, INS.idle_card([
+                "INSET IDLE",
+                "HUD_DISPLAY is not set for this run,",
+                "so no camera frame is being painted here.",
+                "Relaunch with HUD_DISPLAY=1 to enable it.",
+            ]), Display.BGRA)
+        except Exception as exc:                       # recording only
+            print(f"hud: idle card paste failed: {exc!r}", flush=True)
+
+    # ---- is the inset actually being written to, and with what? -----------
+    # A permanently black overlay looks identical from outside to one that is
+    # never painted, so say so in the log the first time each sink is pasted,
+    # with the statistics that tell a black CAMERA FRAME from a black OVERLAY:
+    # mean/min/max over the image that was handed to the Display. A paste that
+    # raises is reported too rather than swallowed - this is a recording-only
+    # sink, so it must never take the audit down, but a silent failure here is
+    # exactly the bug this reports.
+    _painted = {}
+
+    def paint(display, img, what):
+        """INS.push with a one-time report per sink. Returns True on success."""
+        try:
+            INS.push(display, img, Display.BGRA)
+        except Exception as exc:                       # recording only
+            if _painted.get(what) != "failed":
+                _painted[what] = "failed"
+                import traceback
+                print(f"hud: {what} paste FAILED: {exc!r}", flush=True)
+                traceback.print_exc()
+            return False
+        if what not in _painted:
+            _painted[what] = "ok"
+            print(f"hud: {what} first paste OK - {img.shape[1]}x{img.shape[0]} "
+                  f"mean={img.mean():.1f} min={img.min()} max={img.max()}"
+                  f"{' <<< ALL-BLACK IMAGE' if int(img.max()) == 0 else ''}",
+                  flush=True)
+        return True
+
+    drive_banner = {"text": "Starting patrol..."}
+    if HUD_DISPLAY and (inset is not None or dash_disp is not None or crop_disp is not None):
+        step_counter = {"n": 0}
+        _prev_on_step = drv.on_step
+
+        def _display_on_step():
+            _prev_on_step()
+            step_counter["n"] += 1
+            if inset is not None and step_counter["n"] % 8 == 1:
+                raw = cam.getImage()
+                if raw is not None:
+                    frame = np.ascontiguousarray(
+                        np.frombuffer(raw, np.uint8).reshape((H, W, 4))[:, :, :3])
+                    paint(inset, INS.draw_detections(
+                        frame, [], banner=drive_banner["text"]), "inset/drive")
+
+        drv.on_step = _display_on_step
+        if dash_disp is not None:
+            paint(dash_disp, INS.draw_dashboard(
+                slots, twin.slots, action="Initializing..."), "dashboard")
+            _orig_twin_update = twin.update
+
+            def _dash_twin_update(obs):
+                st = _orig_twin_update(obs)
+                # The twin's answer is what the audit runs on, so it is
+                # computed and kept BEFORE the dashboard is touched and
+                # returned whatever the drawing does. A recording-only sink
+                # must not be able to end a six-minute run: redrawing used
+                # to raise AttributeError here on the first decided slot
+                # (obs.sku - Observation carries `label`), which killed the
+                # audit at slot 1 of 30 with the overlay half painted.
+                try:
+                    paint(dash_disp, INS.draw_dashboard(
+                        slots, twin.slots, slot_id=obs.slot_id,
+                        decoded_sku=obs.label, status=st,
+                        action="Audited"), "dashboard")
+                except Exception as exc:
+                    if _painted.get("dashboard/draw") != "failed":
+                        _painted["dashboard/draw"] = "failed"
+                        import traceback
+                        print(f"hud: dashboard redraw FAILED: {exc!r} - the "
+                              f"audit continues without it", flush=True)
+                        traceback.print_exc()
+                return st
+
+            twin.update = _dash_twin_update
+        if crop_disp is not None:
+            paint(crop_disp, INS.draw_crop(
+                None, [], (), code_sku, title=f"CUT {('CODE128' if LABEL == 'barcode' else LABEL.upper()) if LABEL else 'LABEL'}"), "crop")
 
     # ---- next-best-view decision logging (dev only) -----------------------
     nbv_path = os.environ.get("SHELFSCAN_NBV_LOG")
@@ -403,6 +527,13 @@ def main():
             current["key"] = key
         if hud:                          # drawn BEFORE the robot sets off
             hud.begin(sid, s)
+        if HUD_DISPLAY:
+            drive_banner["text"] = f"MOVING -> Side {s['rack']} L{s['level']} Bay {s['bay']}"
+            if dash_disp is not None:
+                paint(dash_disp, INS.draw_dashboard(
+                    slots, twin.slots, slot_id=sid,
+                    action=f"Moving to Side {s['rack']} L{s['level']} Bay {s['bay']}"),
+                    "dashboard")
         x, y, yaw = s["viewpoints"][vp]
         last_level["v"] = s["level"]
         lift.request(s["lift"])          # lift travels while the base drives
@@ -419,8 +550,14 @@ def main():
         if inset is not None and HUD_SCAN_STEPS:
             # Recording only, and never during an eval: run_batch clears
             # HUD_DISPLAY, and this needs it as well as its own step count.
-            INS.show(inset, Display.BGRA, img, boxes, (), code_sku,
-                     pending=True)
+            paint(inset, INS.draw_detections(
+                img, boxes, (), code_sku, pending=True,
+                banner=f"YOLO DETECTING | Side {s['rack']} L{s['level']} Bay {s['bay']}"),
+                "inset/pending")
+            if crop_disp is not None:
+                paint(crop_disp, INS.draw_crop(
+                    img, boxes, (), code_sku, title=f"CUT {('CODE128' if LABEL == 'barcode' else LABEL.upper()) if LABEL else 'LABEL'}", pending=True),
+                    "crop")
             for _ in range(HUD_SCAN_STEPS):
                 robot.step(step)
                 lift.tick()
@@ -465,10 +602,13 @@ def main():
             hud.detection(boxes, _txt, _sku)
 
         if inset is not None:
-            # The frame the detector actually ran on, the boxes it returned and
-            # the codes already decoded from it - nothing is re-detected or
-            # re-decoded for the picture.
-            INS.show(inset, Display.BGRA, img, boxes, codes, code_sku)
+            paint(inset, INS.draw_detections(
+                img, boxes, codes, code_sku,
+                banner=f"YOLO | Side {s['rack']} L{s['level']} Bay {s['bay']}"),
+                "inset/decode")
+        if crop_disp is not None:
+            paint(crop_disp, INS.draw_crop(
+                img, boxes, codes, code_sku, title=f"CUT {('CODE128' if LABEL == 'barcode' else LABEL.upper()) if LABEL else 'LABEL'}"), "crop")
 
         sb = slot_boxes[sid] if LABEL else slot_box(s)
         if sb is None:
@@ -549,6 +689,9 @@ def main():
     elapsed = robot.getTime() - t0
     if hud:                              # after `elapsed`: the hold it spends
         hud.finish(twin.summary())       # is not charged to the audit time
+    if dash_disp is not None:
+        paint(dash_disp, INS.draw_dashboard(
+            slots, twin.slots, action="Scan complete"), "dashboard")
 
     # ---- scoring against ground truth (layout.json is used ONLY here) ----
     truth = {sid: true_status(slots[sid]["expected"], slots[sid]["actual"]) for sid in order}

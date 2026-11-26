@@ -119,6 +119,8 @@ CAM_Z = CAM_LEVEL_Z[0]             # camera height with the lift fully down
 # robot_node's `display`) has to match it exactly: the controller pastes the
 # camera frame onto that Display unresampled, and a mismatch would crop it.
 CAM_W, CAM_H = 640, 480
+CROP_W, CROP_H = 320, 260
+DASH_W, DASH_H = 420, 340
 ROW_Y = (0.0, round(SHELF_DEPTH + AISLE_W, 4))   # rack centre y of each row
 RACK_LABEL = ("A", "B")
 AISLE_MID_Y = round((SHELF_DEPTH / 2 + ROW_Y[1] - SHELF_DEPTH / 2) / 2, 4)
@@ -703,7 +705,11 @@ def robot_node(x0, y0, yaw, controller, display=False):
     # perturb the carriage. Empty string when off, including the leading
     # space, so the robot node is unchanged byte for byte.
     disp = (f' DEF INSET Display {{ name "inset" '
-            f'width {CAM_W} height {CAM_H} }}') if display else ''
+            f'width {CAM_W} height {CAM_H} }}'
+            f' DEF CROP Display {{ name "crop" '
+            f'width {CROP_W} height {CROP_H} }}'
+            f' DEF DASHBOARD Display {{ name "dashboard" '
+            f'width {DASH_W} height {DASH_H} }}') if display else ''
     lift = (f'SliderJoint {{ jointParameters JointParameters {{ axis 0 0 1 }} '
             f'device [ LinearMotor {{ name "lift" minPosition 0 '
             f'maxPosition {LIFT_POS[-1]} maxForce 300 maxVelocity 0.35 }} ] '
@@ -798,7 +804,12 @@ def write_code_images(layout, worlds_dir=None, px=640):
 #
 # Left at 0;0 it also clears the HUD text panel: 480 of a 747-pixel view ends
 # at 0.643 and the panel starts at 0.655.
-OVERLAYS = ("shelfscan:camera;0;1;0;0", "shelfscan:inset;1;1;0;0")
+OVERLAYS = (
+    "shelfscan:camera;0;1;0;0",
+    "shelfscan:inset;1;0.6;0.01;0.01",
+    "shelfscan:crop;1;0.85;0.33;0.01",
+    "shelfscan:dashboard;1;0.9;0.57;0.01",
+)
 PERSP_KEY = "renderingDevicePerspectives: "
 
 
