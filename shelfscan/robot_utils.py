@@ -7,6 +7,65 @@ from pathlib import Path
 
 CLASSES = ["sku_A", "sku_B", "sku_C", "sku_D", "slot_empty", "blocker"]
 
+# v3 class set, for the QR/barcode world: the four SKUs collapse into ONE
+# cardboard_box class (in that world the SKU is carried by the code, not by the
+# carton's look, so asking the detector to tell SKUs apart is asking it to read
+# the code - which is zxing's job), and the code plate itself becomes a class so
+# the audit can crop it before decoding.
+CLASSES_V3 = ["cardboard_box", "label", "slot_empty", "blocker"]
+CLASS_SETS = {"v2": CLASSES, "v3": CLASSES_V3}
+
+
+CAPTURE_KINDS = ("empty_blocked",)
+
+
+def slot_matches(slot, only):
+    """Does this slot belong to the capture subset named by `only`?
+
+    `only` empty (the default) means every slot. "empty_blocked" selects the
+    empty bays that have a blocker in front of them - roughly one slot in a
+    hundred, and the case the v3 detector got wrong on 5 of the 6 that
+    appeared in seeds 101-110. Collecting it by driving to those slots alone
+    costs one stop per seed instead of thirty, and leaves the scenes
+    themselves untouched: the frames still show whatever is on the level.
+
+    Shared so the capture controller and the batch runner cannot disagree
+    about which seeds are worth starting Webots for."""
+    if not only:
+        return True
+    if only == "empty_blocked":
+        return not slot["actual"] and bool(slot.get("blocker_kind"))
+    raise ValueError(f"unknown capture subset {only!r}")
+
+
+def under_root(value, root, default):
+    """Resolve an output path from the environment against the REPO ROOT.
+
+    Webots starts a controller with its working directory set to the
+    controller's OWN folder, so a relative path from the caller lands under
+    webots/controllers/<name>/ instead of where the caller meant. It has
+    bitten twice: --results results_v3/qr wrote the eval JSON to
+    webots/controllers/shelfscan_audit/ and the batch runner reported all
+    twenty seeds FAILED, and --out datasets_v4 wrote 364 captured frames to
+    webots/controllers/data_capture/. Both runs had actually succeeded, and
+    both looked like total failures. An absolute path and an unset value are
+    untouched, so no existing run changes."""
+    if not value:
+        return root / default
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
+def results_dir(value, root):
+    """Where an audit run writes its JSON and CSV."""
+    return under_root(value, root, "results_v2")
+
+
+def class_set(name=None):
+    """The class list to write labels against. SHELFSCAN_CLASSES selects it;
+    the default is the original v2 set, so every existing run is unchanged."""
+    return CLASS_SETS[name or os.environ.get("SHELFSCAN_CLASSES") or "v2"]
+
 # TurtleBot3 Burger
 WHEEL_R, AXLE, MAX_W = 0.033, 0.160, 6.67
 

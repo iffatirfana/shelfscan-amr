@@ -46,5 +46,6 @@ class SlotRecord:
     observed_label: Optional[str] = None
     last_viewpoint: Optional[str] = None
     last_occluder_side: Optional[str] = None
+    last_visibility: float = 0.0         # only used as a feature by V5
     n_observations: int = 0
     evidence: list = field(default_factory=list)   # e.g. saved image paths

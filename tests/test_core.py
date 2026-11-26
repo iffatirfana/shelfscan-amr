@@ -1,10 +1,13 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from shelfscan.reasoning import classify               # noqa: E402
+from shelfscan.robot_utils import (results_dir,        # noqa: E402
+                                   slot_matches, under_root)
 from shelfscan.twin import DigitalTwin                 # noqa: E402
 from shelfscan.types import EMPTY_CLASS, Observation, Status  # noqa: E402
 from shelfscan.viewpoint import choose_viewpoint       # noqa: E402
@@ -83,6 +86,61 @@ class TestViewpoint(unittest.TestCase):
             tried.append(vp)
             seen.append(vp)
         self.assertEqual(set(seen), {"left", "right", "close"})
+
+
+class TestResultsDir(unittest.TestCase):
+    """Webots runs a controller from the controller's OWN folder, so a relative
+    SHELFSCAN_RESULTS resolved against the working directory lands nowhere the
+    caller looks - a whole batch reports FAILED while every run actually
+    succeeded. It is resolved against the repo root instead."""
+
+    ROOT = Path("/repo")
+
+    def test_a_relative_path_hangs_off_the_repo_root(self):
+        self.assertEqual(results_dir("results_v3/qr", self.ROOT),
+                         self.ROOT / "results_v3/qr")
+
+    def test_an_absolute_path_is_left_alone(self):
+        p = Path(tempfile.gettempdir()).resolve() / "elsewhere"
+        self.assertEqual(results_dir(str(p), self.ROOT), p)
+
+    def test_unset_and_empty_both_give_the_v2_default(self):
+        for value in (None, ""):
+            self.assertEqual(results_dir(value, self.ROOT),
+                             self.ROOT / "results_v2")
+
+    def test_the_capture_output_dir_resolves_the_same_way(self):
+        """--out datasets_v4 wrote 364 frames under the controller's folder
+        before this was shared, which looked exactly like capturing nothing."""
+        self.assertEqual(under_root("datasets_v4", self.ROOT, "dataset"),
+                         self.ROOT / "datasets_v4")
+        self.assertEqual(under_root(None, self.ROOT, "dataset"),
+                         self.ROOT / "dataset")
+
+class TestSlotMatches(unittest.TestCase):
+    """The capture subset predicate. The capture controller and the batch
+    runner both use it - the runner to decide a seed is worth starting Webots
+    for, the controller to decide which slots to drive to - so if they ever
+    disagreed a seed would launch and capture nothing."""
+
+    @staticmethod
+    def slot(actual=None, blocker=None):
+        return {"actual": actual, "blocker_kind": blocker}
+
+    def test_no_subset_keeps_every_slot(self):
+        for sl in (self.slot(), self.slot("sku_A"), self.slot(None, "pallet")):
+            self.assertTrue(slot_matches(sl, ""))
+            self.assertTrue(slot_matches(sl, None))
+
+    def test_empty_blocked_needs_both_empty_and_a_blocker(self):
+        self.assertTrue(slot_matches(self.slot(None, "pallet"), "empty_blocked"))
+        self.assertFalse(slot_matches(self.slot(None, None), "empty_blocked"))
+        self.assertFalse(slot_matches(self.slot("sku_A", "pallet"), "empty_blocked"))
+        self.assertFalse(slot_matches(self.slot("sku_A", None), "empty_blocked"))
+
+    def test_an_unknown_subset_is_refused_not_silently_empty(self):
+        with self.assertRaises(ValueError):
+            slot_matches(self.slot(), "nonsense")
 
 
 if __name__ == "__main__":

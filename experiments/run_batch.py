@@ -2,6 +2,9 @@
 
     # training data from seeds 1..10
     python experiments/run_batch.py capture --seeds 1-10 --jobs 5
+    # v3 (4-class) data from the QR world, seeds 13-14 held out as the dev set
+    python experiments/run_batch.py capture --seeds 1-12 --val-seeds 13-14
+        --label qr --classes v3 --vp-keep 2 --vp-keep-empty 4 --out datasets_v3
     # evaluate the three policies on unseen seeds 101..110
     python experiments/run_batch.py eval --seeds 101-110 --jobs 6
 
@@ -22,7 +25,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "webots/tools"))
+sys.path.insert(0, str(ROOT))
 from make_world import make, wbt  # noqa: E402
+from shelfscan.robot_utils import slot_matches  # noqa: E402
 
 WORLDS = ROOT / "webots/worlds"
 POLICIES = ["V1_fixed", "V3_rescan", "V4_active"]
@@ -74,7 +79,16 @@ def eval_seedwise(a):
         jobs = [(f"{p}_s{seed}", seed, "shelfscan_audit",
                  {"SHELFSCAN_POLICY": p, "SHELFSCAN_RESULTS": a.results,
                   "SHELFSCAN_WEIGHTS": a.weights,
-                  "SHELFSCAN_LABEL": a.label or ""}) for p in pols]
+                  "SHELFSCAN_CLASSES": a.classes,
+                  "SHELFSCAN_LABEL": a.label or "",
+                  "SHELFSCAN_NBV_LOG": a.nbv_log or "",
+                  "SHELFSCAN_NBV_MODEL": a.nbv_model or "",
+                  # a measured run is never recorded: clear both overlay
+                  # flags explicitly so an exported HUD=1 / HUD_DISPLAY=1 in
+                  # the shell cannot reach the controller. The worlds built
+                  # here never carry the Display device either, because wbt()
+                  # is called without display=True.
+                  "HUD": "", "HUD_DISPLAY": ""}) for p in pols]
         t0 = time.time()
         with ThreadPoolExecutor(len(jobs)) as ex:
             list(ex.map(lambda j: run_one(*j, a.timeout, a.version,
@@ -115,10 +129,35 @@ def main():
     ap.add_argument("--version", default="R2025a")
     ap.add_argument("--weights", default=str(ROOT / "models_v2/shelfscan_yolov8n.pt"))
     ap.add_argument("--no-rendering", action="store_true")
+    ap.add_argument("--val-seeds", default=None,
+                    help="capture mode: these seeds go to images/val, the rest "
+                         "to images/train (default: random 15%% per frame)")
+    ap.add_argument("--classes", choices=["v2", "v3"], default="v2",
+                    help="capture mode: v2 = the 4 SKUs + slot_empty + "
+                         "blocker; v3 = cardboard_box + label + slot_empty + "
+                         "blocker, for the QR/barcode world")
+    ap.add_argument("--vp-keep", type=int, default=None,
+                    help="capture mode: keep only this many of the four "
+                         "viewpoints per slot, drawn at random")
+    ap.add_argument("--capture-only", choices=["empty_blocked"],
+                    help="capture mode: drive to only the slots of this kind, "
+                         "so a rare case can be collected over many seeds "
+                         "without paying for all 30 slots of each")
+    ap.add_argument("--empty-vis", type=float,
+                    help="capture mode: how much of an empty slot must be "
+                         "visible before it is labelled slot_empty "
+                         "(default 0.7; a carton is kept down to 0.35)")
+    ap.add_argument("--vp-keep-empty", type=int, default=None,
+                    help="capture mode: ... but this many for a slot with no "
+                         "carton, so the rare slot_empty class is not thinned")
     ap.add_argument("--label", choices=["qr", "barcode"], default=None,
                     help="MVP: build the world with machine-readable carton "
                          "labels and let the audit read them")
     ap.add_argument("--qr", action="store_true", help="shorthand for --label qr")
+    ap.add_argument("--nbv-model", default=None,
+                    help="V5: joblib next-best-view model to score candidates")
+    ap.add_argument("--nbv-log", default=None,
+                    help="dev: append next-best-view candidate rows to this CSV")
     ap.add_argument("--seedwise", action="store_true",
                     help="eval mode: finish all strategies of one seed before "
                          "starting the next, so an early stop still leaves a "
@@ -130,16 +169,42 @@ def main():
         return eval_seedwise(a)
 
     jobs = []
+    val = set(seeds(a.val_seeds)) if a.val_seeds else set()
     for s in seeds(a.seeds):
         if a.mode == "capture":
-            jobs.append((f"cap{s}", s, "data_capture", {"SHELFSCAN_OUT": a.out}))
+            # With --capture-only, most seeds hold no slot of the wanted kind
+            # at all (43 empty-and-blocked slots are spread over 29 of seeds
+            # 15-74). Starting Webots for those costs a minute and saves no
+            # frame, so the layout is generated here and the seed dropped.
+            if a.capture_only and not any(
+                    slot_matches(sl, a.capture_only)
+                    for sl in make(s, label=a.label)["slots"].values()):
+                continue
+            # Split BY SEED when --val-seeds is given: a seed's 30 slots are
+            # one layout, so splitting frames at random would put near-copies
+            # of the same carton on both sides of the split.
+            env = {"SHELFSCAN_OUT": a.out, "SHELFSCAN_CLASSES": a.classes,
+                   "SHELFSCAN_VP_KEEP": str(a.vp_keep) if a.vp_keep else "",
+                   "SHELFSCAN_VP_KEEP_EMPTY": (str(a.vp_keep_empty)
+                                               if a.vp_keep_empty else ""),
+                   "SHELFSCAN_CAPTURE_ONLY": a.capture_only or "",
+                   "SHELFSCAN_EMPTY_VIS": (str(a.empty_vis)
+                                           if a.empty_vis else ""),
+                   "SHELFSCAN_SPLIT": ("val" if s in val else "train") if val else ""}
+            jobs.append((f"cap{s}", s, "data_capture", env))
         else:
             for pol in a.policies.split(","):
                 jobs.append((f"{pol}_s{s}", s, "shelfscan_audit",
-                             {"SHELFSCAN_POLICY": pol, "SHELFSCAN_RESULTS": a.results}))
+                             {"SHELFSCAN_POLICY": pol,
+                              "SHELFSCAN_RESULTS": a.results,
+                              "SHELFSCAN_WEIGHTS": a.weights,
+                              "SHELFSCAN_CLASSES": a.classes,
+                              "SHELFSCAN_LABEL": a.label or "",
+                              "HUD": "", "HUD_DISPLAY": ""}))
     print(f"{len(jobs)} runs, {a.jobs} in parallel", flush=True)
     with ThreadPoolExecutor(a.jobs) as ex:
-        rows = list(ex.map(lambda j: run_one(*j, a.timeout, a.version), jobs))
+        rows = list(ex.map(lambda j: run_one(*j, a.timeout, a.version,
+                                             a.no_rendering, a.label), jobs))
     (ROOT / "logs").mkdir(exist_ok=True)
     log = ROOT / f"logs/batch_{a.mode}.csv"
     new = not log.exists()

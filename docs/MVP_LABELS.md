@@ -239,3 +239,7 @@ UNVERIFIED.
   content.
 * This is an MVP on 10 seeds in simulation. No hardware, no retraining, no
   tuning of the two thresholds.
+
+* **Retraining the detector for this world was tried, twice, and did not
+  work.** Both attempts and the measured trade-off are written up in
+  [MVP_DETECTOR_V3_V4.md](MVP_DETECTOR_V3_V4.md); that line of work is closed.

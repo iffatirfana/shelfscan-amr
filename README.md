@@ -13,7 +13,11 @@ from a better viewpoint (active verification).
 
 A narrow aisle between **two tall racking rows facing each other**, 3 levels x 5
 bays on each side = **30 slots per seed**. Blue uprights, orange beams, concrete
-floor with a yellow lane line, steel-truss ceiling.
+floor with a yellow lane line, steel-truss ceiling. (`make_world --demo` repaints
+the racking galvanised grey and closes the bay-mouth pallet's back for the
+recording. It is off everywhere else on purpose: v4 was trained against the
+blue-and-orange world, so those visuals change what the detector sees - see
+`DEMO_PALETTE` in `webots/tools/make_world.py`.)
 
 - **Contents are plain cardboard cartons** in five size classes (small, medium,
   large, tall, wide-flat), with random in-bay offset and rotation; some sit on

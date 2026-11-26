@@ -32,6 +32,7 @@ class DigitalTwin:
         rec.last_checked = obs.t
         rec.last_viewpoint = obs.viewpoint
         rec.last_occluder_side = obs.occluder_side
+        rec.last_visibility = obs.visibility
         if evidence_path and new_status not in (Status.OK,):
             rec.evidence.append(evidence_path)
         return rec.status

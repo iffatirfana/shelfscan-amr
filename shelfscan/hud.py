@@ -1,0 +1,293 @@
+"""On-screen HUD for the demo recording, drawn with Robot.setLabel.
+
+Pure text/colour logic plus a thin renderer that takes ANY object exposing
+Webots' `setLabel(id, text, x, y, size, colour, transparency, font)` - so this
+module imports no Webots and the whole of it is unit-testable.
+
+The HUD is a READ-ONLY view of the audit: it is handed what the controller has
+already decided and never feeds anything back. It is created only when HUD=1,
+so with the variable unset not one line of this file runs.
+
+SKU naming: the slot map calls the four SKUs sku_A..sku_D, and the Code128
+payload already numbers them 1..4 (make_world.SKU_DIGIT). The HUD shows that
+number - sku_C is drawn as "SKU_3" - because it reads better at video size.
+"""
+from .types import EMPTY_CLASS, Status
+
+# ---------------------------------------------------------------- colours ----
+WHITE = 0xFFFFFF
+GREY = 0xB0BEC5
+ACTION = 0xFFD54F
+STATUS_COLOUR = {
+    Status.OK: 0x00C853,            # green
+    Status.MISPLACED: 0xD50000,     # red
+    Status.EMPTY: 0x2962FF,         # blue
+    Status.UNVERIFIED: 0xFFAB00,    # amber
+}
+
+# Where each line sits in the 3D view: (label id, x, y, size, colour).
+# Ids are fixed so a redraw replaces a line instead of stacking a new one.
+#
+# The panel sits TOP-RIGHT, not top-left, because Webots draws the robot's
+# Camera device as a magenta-bordered overlay in the top-left corner at the
+# camera's native 640x480. In a 1314x747 view that covers x < 0.49, y < 0.64 -
+# enough to swallow a left-hand panel wherever it is put vertically (measured:
+# at y=0.52 the slot, detector and decode lines were all still on top of it).
+# Keeping that overlay readable is worth the move: it IS the camera inset,
+# showing the code as it is read.
+#
+# It goes BELOW the overlay rather than beside it. To the right of the overlay
+# the backdrop is the pale warehouse wall, and white text on it was washed out
+# (tried: the slot, detector and twin lines were barely legible). Under the
+# overlay the backdrop is the floor and racking - mid-tone - which is what the
+# action and tally lines have been readable against all along.
+#
+# No reading line is smaller than 0.044. The detector line is the longest of
+# them - it can list four classes with counts and confidences - and was set to
+# 0.040 to buy width, but at 1080p that is the one line a viewer has to lean in
+# for. It now matches the decode and twin lines; the longest text it can
+# produce still fits the view at that size.
+PANEL_X, PANEL_Y = 0.02, 0.655
+SLOT, DET, DECODE, TWIN, STATE, NEXT, TALLY = range(7)
+LAYOUT = {
+    SLOT:   (PANEL_X, PANEL_Y + 0.000, 0.052, WHITE),
+    DET:    (PANEL_X, PANEL_Y + 0.040, 0.044, WHITE),
+    DECODE: (PANEL_X, PANEL_Y + 0.077, 0.044, WHITE),
+    TWIN:   (PANEL_X, PANEL_Y + 0.114, 0.044, WHITE),
+    STATE:  (PANEL_X, PANEL_Y + 0.155, 0.065, WHITE),
+    NEXT:   (0.02, 0.878, 0.095, ACTION),
+    TALLY:  (0.02, 0.950, 0.048, WHITE),
+}
+# Where the Webots camera overlay sits, as a fraction of a ~1314x747 view.
+CAM_OVERLAY = (0.49, 0.64)
+# ... and that view's aspect. setLabel takes `size` as a fraction of the view
+# HEIGHT but x as a fraction of its WIDTH, so working out whether a line fits
+# across the view needs the ratio between them.
+VIEW_ASPECT = 1314 / 747
+# Mean advance per character, in units of `size`. Webots exposes no text
+# metrics, so this is measured off a capture: the 47-character detector line of
+# docs/hud_shots/04_S0-2-1_OK.png spans 275 of 1314 px at size 0.040, i.e.
+# 0.196*size per character. Rounded up for headroom - it is only ever used to
+# check that a line cannot run off the view.
+CHAR_ADVANCE = 0.25
+
+# Order the detector classes are listed in, so the line does not reshuffle
+# between frames. Anything not named here is appended, sorted, after them.
+CLASS_ORDER = ("cardboard_box", "label", "slot_empty", "blocker",
+               "sku_A", "sku_B", "sku_C", "sku_D")
+
+LABEL_NAME = {"qr": "QR", "barcode": "Code128"}
+
+
+# ------------------------------------------------------------- text pieces ---
+def sku_label(sku):
+    """sku_C -> 'SKU_3'. Anything else is passed through unchanged."""
+    if not sku:
+        return "-"
+    if sku == EMPTY_CLASS:
+        return "EMPTY"
+    if sku.startswith("sku_") and len(sku) == 5:
+        i = "ABCD".find(sku[4])
+        if i >= 0:
+            return f"SKU_{i + 1}"
+    return sku
+
+
+def slot_line(slot, index, total):
+    """'Side A | L1 | Bay 3        slot 7/30'."""
+    return (f"Side {slot['rack']} | L{slot['level']} | Bay {slot['bay']}"
+            f"        slot {index}/{total}")
+
+
+def detector_line(boxes):
+    """'Detector  cardboard_box x2 0.91 | label x2 0.88 | blocker x1 0.74'.
+
+    `boxes` is the controller's [(xyxy, class, confidence)] for this frame, so
+    what the HUD shows is literally what the policy was given."""
+    best, n = {}, {}
+    for _, cls, conf in boxes:
+        best[cls] = max(best.get(cls, 0.0), conf)
+        n[cls] = n.get(cls, 0) + 1
+    if not best:
+        return "Detector  no boxes"
+    known = [c for c in CLASS_ORDER if c in best]
+    rest = sorted(c for c in best if c not in CLASS_ORDER)
+    parts = [f"{c} x{n[c]} {best[c]:.2f}" for c in known + rest]
+    return "Detector  " + " | ".join(parts)
+
+
+def decode_line(label_type, text=None, sku=None):
+    """'QR -> SKU_3', 'Code128 -> SKU_2' or 'DECODE FAIL'.
+
+    With no label mode the world carries printed patterns and there is nothing
+    to decode, so the line says so rather than claiming a failure."""
+    name = LABEL_NAME.get(label_type)
+    if name is None:
+        return "Decode  -  (printed pattern world)"
+    if sku:
+        return f"{name} -> {sku_label(sku)}"
+    if text:
+        return f"{name} -> DECODE FAIL  ({text})"
+    return f"{name} -> DECODE FAIL"
+
+
+def twin_line(expected, decoded):
+    """'Twin  expected SKU_1  |  read SKU_3'."""
+    exp = "(empty)" if expected is None else sku_label(expected)
+    return f"Twin  expected {exp}  |  read {sku_label(decoded)}"
+
+
+def status_entry(status):
+    """(text, colour) for the state line."""
+    st = Status(status)
+    return st.value, STATUS_COLOUR[st]
+
+
+DECIDING = "deciding..."
+
+
+def action_line(action):
+    return f"NEXT  {action}"
+
+
+def tally_line(counts):
+    """'OK 12   MISPLACED 2   EMPTY 1   UNVERIFIED 3'."""
+    return "   ".join(f"{s.value} {counts.get(s.value, 0)}" for s in Status)
+
+
+def next_action(prev, nxt):
+    """What the robot is about to do, from the slot it just left to the next.
+
+    `prev` and `nxt` are slot dicts (rack, level, bay); `nxt` is None once the
+    scan is over. Checked side first, then level, then bay, because that is the
+    order the scan itself moves in: a side change always implies the others."""
+    if nxt is None:
+        return "Scan complete"
+    if prev is None:
+        return f"Moving to Bay {nxt['bay']}"
+    if prev["rack"] != nxt["rack"]:
+        return f"Switching to Side {nxt['rack']}"
+    if prev["level"] != nxt["level"]:
+        return f"Lifting to L{nxt['level']}"
+    if prev["bay"] != nxt["bay"]:
+        return f"Moving to Bay {nxt['bay']}"
+    return "Re-look from new viewpoint"
+
+
+# ------------------------------------------------------------------ render ---
+class Hud:
+    """Draws the HUD and holds the simulation briefly so it can be read.
+
+    `robot` only has to provide setLabel(). `hold` is called once per decided
+    slot and is the ONLY thing here that touches the simulation clock - which
+    is why the HUD is never enabled for an evaluation run.
+    """
+
+    def __init__(self, robot, total, label_type=None, hold_steps=20,
+                 step_fn=None, font="Arial", shot_fn=None):
+        self.robot = robot
+        self.total = total
+        self.label_type = label_type
+        self.hold_steps = hold_steps
+        self.step_fn = step_fn
+        self.font = font
+        self.shot_fn = shot_fn    # optional: save a screenshot of the view
+        self._said = False        # one-time "the HUD is drawing" report
+        self.seen = {}            # slot_id -> 1-based scan index
+        self.prev = None          # slot dict of the previous observation
+        self.slot = None
+        self.slot_id = None
+        self.counts = {}
+
+    # -- drawing ----------------------------------------------------------
+    def _put(self, lid, text, colour=None):
+        x, y, size, default = LAYOUT[lid]
+        col = default if colour is None else colour
+        self.robot.setLabel(lid, text, x, y, size, col, 0.0, self.font)
+        if not self._said:
+            self._said = True
+            print(f"hud: first setLabel id={lid} at x={x} y={y} size={size} "
+                  f"colour=0x{col:06x} font={self.font!r} text={text!r}",
+                  flush=True)
+
+    def begin(self, slot_id, slot):
+        """Called as the robot sets off for a slot, before it moves."""
+        if slot_id not in self.seen:
+            self.seen[slot_id] = len(self.seen) + 1
+        self.slot_id, self.slot = slot_id, slot
+        self._put(NEXT, action_line(next_action(self.prev, slot)))
+        self._put(SLOT, slot_line(slot, self.seen[slot_id], self.total))
+        # Blank the readings. They belong to the slot just left, and the line
+        # above them now names a different one: leaving them up puts one
+        # slot's id over another slot's detector boxes, decode and status for
+        # the whole drive. detection() and status() refill them on arrival.
+        for lid in (DET, DECODE, TWIN, STATE):
+            self._put(lid, "")
+        self.prev = slot
+        # A shot of the action itself. The decision shot cannot show one: by
+        # then the move is over and the line reads "deciding...", so without
+        # this the action text never appears in a still.
+        self._shot(f"{slot_id}_move")
+
+    def detection(self, boxes, text=None, sku=None):
+        """Called with the detector output and the decode for this frame."""
+        self._put(DET, detector_line(boxes))
+        self._put(DECODE, decode_line(self.label_type, text, sku))
+        self._put(TWIN, twin_line(self.slot["expected"] if self.slot else None,
+                                  sku))
+
+    def status(self, status, counts):
+        """Called once the twin has classified the slot; then holds."""
+        text, colour = status_entry(status)
+        self.counts = counts
+        self._put(STATE, text, colour)
+        self._put(TALLY, tally_line(counts))
+        # Clear the action BEFORE the hold. It described the move that brought
+        # the robot here, and that move is now over: leaving it up makes every
+        # decision frame - exactly the frame a viewer pauses on - read as a
+        # prediction of something already done. What comes next genuinely is
+        # not known yet, because V4 picks its re-looks from this very result,
+        # so the honest line is that a decision is being taken. begin() puts
+        # the real action up the moment there is one.
+        self._put(NEXT, action_line(DECIDING))
+        self.hold()
+        self._shot(f"{self.slot_id}_{text}")
+
+    def finish(self, counts):
+        self._put(NEXT, action_line(next_action(self.prev, None)))
+        self._put(TALLY, tally_line(counts))
+        self.hold()
+        self._shot("complete")
+
+    def _shot(self, tag):
+        """Screenshot after the hold, so the view is settled and every line of
+        the panel is the one that belongs to this slot."""
+        if self.shot_fn is not None:
+            self.shot_fn(tag)
+
+    # -- the only call that costs simulation time -------------------------
+    def hold(self):
+        for _ in range(self.hold_steps):
+            if self.step_fn is not None:
+                self.step_fn()
+
+
+def attach(twin, hud):
+    """Make `twin` redraw the HUD whenever it classifies the observed slot.
+
+    Wrapping the twin keeps shelfscan.policies - which the offline harness
+    shares - free of any HUD code. The wrapper forwards every call and its
+    return value untouched, so the audit cannot tell it is there; it only
+    reads the status afterwards. One frame can also update OTHER slots from
+    codes it happened to read, and those must not redraw the panel or spend a
+    hold, so it redraws for the observed slot alone."""
+    inner = twin.update
+
+    def update(obs, evidence_path=None):
+        status = inner(obs, evidence_path)
+        if obs.slot_id == hud.slot_id:
+            hud.status(status, twin.summary())
+        return status
+
+    twin.update = update
+    return twin

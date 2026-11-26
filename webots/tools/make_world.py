@@ -24,6 +24,7 @@ offline. Targets Webots R2025a on Windows.
 import argparse
 import json
 import math
+import os
 import random
 import sys
 from pathlib import Path
@@ -114,6 +115,12 @@ CAM_AIM = 0.26     # camera height above the deck top of the level it scans
 CAM_LEVEL_Z = tuple(round(z + CAM_AIM, 4) for z in LEVEL_Z)          # .56 1.21 1.86
 LIFT_POS = tuple(round(z - CAM_LEVEL_Z[0], 4) for z in CAM_LEVEL_Z)  # 0 .65 1.30
 CAM_Z = CAM_LEVEL_Z[0]             # camera height with the lift fully down
+# Camera frame size. Named because the optional recording Display (see
+# robot_node's `display`) has to match it exactly: the controller pastes the
+# camera frame onto that Display unresampled, and a mismatch would crop it.
+CAM_W, CAM_H = 640, 480
+CROP_W, CROP_H = 320, 260
+DASH_W, DASH_H = 420, 340
 ROW_Y = (0.0, round(SHELF_DEPTH + AISLE_W, 4))   # rack centre y of each row
 RACK_LABEL = ("A", "B")
 AISLE_MID_Y = round((SHELF_DEPTH / 2 + ROW_Y[1] - SHELF_DEPTH / 2) / 2, 4)
@@ -272,8 +279,13 @@ PALETTE = {
     "LANE_YELLOW":  (0.90, 0.74, 0.10, 0.70, 0.0, None),
     "CEILING":      (0.80, 0.80, 0.82, 0.90, 0.0, None),
     "TRUSS_STEEL":  (0.52, 0.54, 0.57, 0.45, 0.7, None),
-    "RACK_BLUE":    (0.09, 0.24, 0.60, 0.55, 0.25, None),
-    "RACK_ORANGE":  (0.93, 0.42, 0.08, 0.50, 0.25, None),
+    # The racking the DETECTOR was trained on: blue uprights, orange beams.
+    # Named for the section rather than the colour because --demo repaints
+    # them (see DEMO_PALETTE) and a name like RACK_BLUE would then be lying.
+    # These values are load-bearing for accuracy, not decoration - every
+    # training frame in datasets_v4 was captured against them.
+    "RACK_UPRIGHT": (0.09, 0.24, 0.60, 0.55, 0.25, None),
+    "RACK_BEAM":    (0.93, 0.42, 0.08, 0.50, 0.25, None),
     "DECK_STEEL":   (0.58, 0.58, 0.60, 0.60, 0.30, None),
     "RACK_MESH":    (0.28, 0.29, 0.32, 0.80, 0.20, None),
     "CARD_TAPE":    (0.45, 0.33, 0.21, 0.75, 0.0, None),
@@ -286,16 +298,40 @@ PALETTE = {
     "BOT_STEEL":    (0.47, 0.48, 0.50, 0.35, 0.80, None),
     "BOT_LED":      (1.00, 1.00, 1.00, 0.25, 0.0, (1.0, 1.0, 1.0)),
 }
+
+# Overrides applied ONLY in demo mode (--demo / wbt(demo=True)), which is the
+# recording build. Galvanised pallet racking looks like a warehouse; the
+# orange-and-blue above looks like a toy. But the v4 detector was trained on
+# frames captured against the orange-and-blue world, so repainting the racking
+# changes its input: on seeds 101-104 it moved 103 S1-0-1 from UNVERIFIED to
+# EMPTY at conf 0.71 on a bay that really holds sku_B, turning "I don't know"
+# into a confident wrong answer. That is why this is a gate and not a change.
+# Measured runs never set it (experiments/run_batch.py calls wbt() with three
+# positional arguments and no keywords), so eval always sees PALETTE.
+# See docs/MVP_DETECTOR_V3_V4.md.
+DEMO_PALETTE = {
+    "RACK_UPRIGHT": (0.46, 0.48, 0.51, 0.45, 0.75, None),
+    "RACK_BEAM":    (0.66, 0.68, 0.71, 0.35, 0.80, None),
+}
+
 _SEEN = set()
+# Demo-visuals flag. Module level for the same reason _SEEN is: the appearance
+# and geometry helpers are called from a dozen places deep inside wbt(), and
+# wbt() is the one function that resets both. Nothing else writes it.
+_DEMO = False
 
 
 def _app(name):
     """DEF an appearance on first use, USE it afterwards. Must be called at
-    every use site - caching the returned string would emit duplicate DEFs."""
+    every use site - caching the returned string would emit duplicate DEFs.
+
+    The DEF name is the same in both modes - only the baseColor differs - so
+    a demo world and an eval world differ by exactly the painted values."""
     if name in _SEEN:
         return f"USE {name}"
     _SEEN.add(name)
-    r, g, b, rough, metal, emis = PALETTE[name]
+    src = DEMO_PALETTE if (_DEMO and name in DEMO_PALETTE) else PALETTE
+    r, g, b, rough, metal, emis = src[name]
     e = f" emissiveColor {emis[0]} {emis[1]} {emis[2]}" if emis else ""
     return (f"DEF {name} PBRAppearance {{ baseColor {r:.4f} {g:.4f} {b:.4f} "
             f"roughness {rough} metalness {metal}{e} }}")
@@ -403,6 +439,28 @@ def barcode_rect(size):
     return round(w, 4), round(min(BC_ASPECT * w, BC_H_FRAC * sz), 4)
 
 
+PLATE_T = 0.003           # code plate thickness, m
+PLATE_GAP = 0.0025        # plate centre, out from the carton front face
+
+
+def code_plate(size, label):
+    """Pose and extent of the QR/Code128 plate in the CARTON's local frame:
+    (dy, dz, w, h) - offset out along local +y (the aisle-facing direction),
+    offset up along local +z, and the plate's width and height in m.
+
+    The single source of truth for where the plate sits: _carton_children
+    builds the .wbt node from it, and the capture controller projects the same
+    box to get the `label` training boxes. Thickness is PLATE_T."""
+    _, sy, sz = size
+    if label == "barcode":
+        w, h = barcode_rect(size)
+        dz = -0.04 * sz
+    else:
+        w = h = qr_side(size)
+        dz = 0.0
+    return sy / 2 + PLATE_GAP, dz, w, h
+
+
 def _carton_children(size, shade, sku, code=None, label=None):
     """Corrugated carton: brown body, darker tape across the top and along the
     front seam, and - for a real SKU carton - a white shipping label carrying
@@ -419,12 +477,7 @@ def _carton_children(size, shade, sku, code=None, label=None):
         out.append(_box(_app("CARD_TAPE"), sx + 0.004, 0.004, SEAM_T,
                         0, sy / 2 + 0.002, sz / 2 - SEAM_T / 2))
     if code:
-        if label == "barcode":
-            cw, ch = barcode_rect(size)
-            cz = -0.04 * sz
-        else:
-            cw = ch = qr_side(size)
-            cz = 0.0
+        cy_off, cz, cw, ch = code_plate(size, label)
         # filtering 0 (nearest) keeps a QR crisp, and a QR survives the
         # aliasing because of its error correction. A Code128 has none: at
         # 1024 px of texture rendered into ~320 px, nearest sampling drops two
@@ -432,11 +485,11 @@ def _carton_children(size, shade, sku, code=None, label=None):
         # therefore use Webots' filtering so the downsample averages instead.
         filt = 0 if label == "qr" else 4
         out.append(
-            f'Pose {{ translation 0 {sy / 2 + 0.0025:.4f} {cz:.4f} children [ '
+            f'Pose {{ translation 0 {cy_off:.4f} {cz:.4f} children [ '
             f'Shape {{ appearance PBRAppearance {{ baseColor 1 1 1 '
             f'roughness 0.55 metalness 0 baseColorMap ImageTexture {{ '
             f'url [ "{CODE_DIR}/{code}.png" ] filtering {filt} }} }} '
-            f'geometry Box {{ size {cw} 0.003 {ch} }} }} ] }}')
+            f'geometry Box {{ size {cw} {PLATE_T} {ch} }} }} ] }}')
     elif sku:
         lw, lh = LABEL_W_FRAC * sx, LABEL_H_FRAC * sz
         lz = LABEL_Z_FRAC * sz
@@ -455,8 +508,20 @@ def _pallet_children(px, py):
 
 
 def _standing_pallet_children():
-    """A pallet stood on edge at the bay mouth. Local +y faces the aisle."""
-    out = []
+    """A pallet stood on edge at the bay mouth. Local +y faces the aisle.
+
+    In demo mode a board closes the back. Three bearers crossed with five top
+    boards is the real construction, but seen head-on from the aisle the gaps
+    alternate with the boards into a regular light/dark grid that reads as a
+    placeholder texture rather than timber; a solid board behind keeps the
+    slat relief and stops the holes punching through to the bay behind.
+
+    It is gated with the racking repaint because it is equally an input
+    change: a pallet blocker stands in 25 of the 300 slots of eval seeds
+    101-110, so the board would alter what the detector sees in every one of
+    them. Material is unchanged either way - the same WOOD_PALLET."""
+    out = ([_box(_app("WOOD_PALLET"), 0.45, 0.022, 0.55, 0, -0.030, 0)]
+           if _DEMO else [])
     for dx in (0.0, 0.19, -0.19):
         out.append(_box(_app("WOOD_PALLET"), 0.05, 0.08, 0.55, dx, 0, 0))
     for dz in (-0.22, -0.11, 0.0, 0.11, 0.22):
@@ -472,11 +537,11 @@ def _racking(r):
     for k in range(BAYS + 1):                                     # uprights
         xp = -BAY_W / 2 + k * BAY_W
         for dy in (SHELF_DEPTH / 2 - 0.035, -(SHELF_DEPTH / 2 - 0.035)):
-            kids.append(_box(_app("RACK_BLUE"), 0.07, 0.07, RACK_H,
+            kids.append(_box(_app("RACK_UPRIGHT"), 0.07, 0.07, RACK_H,
                              xp, dy, RACK_H / 2))
     for z in list(LEVEL_Z) + [RACK_H - 0.05]:                     # beams
         for dy in (SHELF_DEPTH / 2 - 0.04, -(SHELF_DEPTH / 2 - 0.04)):
-            kids.append(_box(_app("RACK_ORANGE"), run, 0.08, 0.10,
+            kids.append(_box(_app("RACK_BEAM"), run, 0.08, 0.10,
                              xc, dy, z - 0.05))
     for z in LEVEL_Z:                                             # decks, backs
         for k in range(BAYS):
@@ -508,8 +573,14 @@ def _building():
     return out
 
 
-def robot_node(x0, y0, yaw, controller):
+def robot_node(x0, y0, yaw, controller, display=False):
     """Scissor-lift AMR built from base nodes only.
+
+    `display` adds a Display device named "inset" for the demo recording
+    (HUD_DISPLAY=1): the controller paints the annotated camera frame onto it
+    so a viewer sees the decode as it happens. It is a sink - nothing reads
+    it, and no sensor, mass or dimension changes - and with it False the
+    emitted node is byte-for-byte what it was before the device existed.
 
     PHYSICS IS UNCHANGED from the previous world: the drive train is still
     TurtleBot3 Burger geometry (wheel r = 0.033 m, track 0.160 m) so
@@ -627,9 +698,18 @@ def robot_node(x0, y0, yaw, controller):
             f'children [ Shape {{ appearance {_app("BOT_DARK")} '
             f'geometry Cylinder {{ height 0.008 radius 0.016 }} }} ] }}')
     carriage.append(
-        'DEF CAM Camera { name "camera" translation 0.05 0 0 width 640 '
-        'height 480 fieldOfView 1.0 '
-        'recognition Recognition { maxRange 4 frameThickness 0 } }')
+        f'DEF CAM Camera {{ name "camera" translation 0.05 0 0 width {CAM_W} '
+        f'height {CAM_H} fieldOfView 1.0 '
+        f'recognition Recognition {{ maxRange 4 frameThickness 0 }} }}')
+    # Recording-only sink, outside the lift so it carries no mass and cannot
+    # perturb the carriage. Empty string when off, including the leading
+    # space, so the robot node is unchanged byte for byte.
+    disp = (f' DEF INSET Display {{ name "inset" '
+            f'width {CAM_W} height {CAM_H} }}'
+            f' DEF CROP Display {{ name "crop" '
+            f'width {CROP_W} height {CROP_H} }}'
+            f' DEF DASHBOARD Display {{ name "dashboard" '
+            f'width {DASH_W} height {DASH_H} }}') if display else ''
     lift = (f'SliderJoint {{ jointParameters JointParameters {{ axis 0 0 1 }} '
             f'device [ LinearMotor {{ name "lift" minPosition 0 '
             f'maxPosition {LIFT_POS[-1]} maxForce 300 maxVelocity 0.35 }} ] '
@@ -642,7 +722,7 @@ def robot_node(x0, y0, yaw, controller):
             f'supervisor TRUE children [ {" ".join(body)} '
             f'{wheel("left", 0.08)} {wheel("right", -0.08)} '
             f'{caster("front caster", 0.07)} {caster("rear caster", -0.07)} '
-            f'GPS {{ name "gps" }} InertialUnit {{ name "imu" }} {lift} ] '
+            f'GPS {{ name "gps" }} InertialUnit {{ name "imu" }} {lift}{disp} ] '
             f'boundingObject Pose {{ translation 0 0 0.055 children [ '
             f'Cylinder {{ height 0.08 radius 0.09 }} ] }} '
             f'physics Physics {{ density -1 mass 1.0 }} }}')
@@ -711,7 +791,67 @@ def write_code_images(layout, worlds_dir=None, px=640):
     return n
 
 
-def wbt(layout, version, controller="shelfscan_audit"):
+# Where Webots puts each device overlay in the 3D view, as
+# "<robot>:<device>;<visible>;<scale>;<x>;<y>" with x/y as fractions of the
+# view.
+#
+# The raw camera overlay is turned OFF and the inset takes its place. Webots
+# renders a Camera overlay straight from the sensor and exposes no way to draw
+# on it, so that panel can never carry the detection box - it showed a QR with
+# nothing round it next to an inset showing the same QR boxed and decoded,
+# which reads as the detector having missed it. The inset is the same frame
+# with the boxes added, so dropping the raw one loses no information.
+#
+# Left at 0;0 it also clears the HUD text panel: 480 of a 747-pixel view ends
+# at 0.643 and the panel starts at 0.655.
+OVERLAYS = (
+    "shelfscan:camera;0;1;0;0",
+    "shelfscan:inset;1;0.6;0.01;0.01",
+    "shelfscan:crop;1;0.85;0.33;0.01",
+    "shelfscan:dashboard;1;0.9;0.57;0.01",
+)
+PERSP_KEY = "renderingDevicePerspectives: "
+
+
+def write_overlay_perspective(world_path, overlays=OVERLAYS,
+                              version="R2025a"):
+    """Point the sibling .wbproj at `overlays`, keeping every other setting.
+
+    Webots stores per-world GUI state in .<world>.wbproj and rewrites it on
+    exit. Only the overlay lines are replaced, so a tuned viewpoint or console
+    layout survives; a file that does not exist yet is created with just the
+    header and those lines, which Webots accepts and then fills in.
+
+    Called only for a --display build, so an ordinary world's saved GUI state
+    is never touched."""
+    proj = Path(world_path).parent / f".{Path(world_path).stem}.wbproj"
+    lines = (proj.read_text().splitlines()
+             if proj.exists() else [f"Webots Project File version {version}"])
+    kept = [ln for ln in lines if not ln.startswith(PERSP_KEY)]
+    text = "\n".join(kept + [PERSP_KEY + o for o in overlays]) + "\n"
+    if proj.exists():
+        # NOT write_text: a dot-file Webots created on Windows carries the
+        # hidden attribute, and opening it with CREATE_ALWAYS - which is what
+        # write_text does - fails with PermissionError unless the same
+        # attribute is passed back. Truncating an already-open handle keeps
+        # the attribute and works on both platforms.
+        with proj.open("r+", encoding="utf-8") as f:
+            f.seek(0)
+            f.write(text)
+            f.truncate()
+    else:
+        proj.write_text(text, encoding="utf-8")
+    return proj
+
+
+def wbt(layout, version, controller="shelfscan_audit", display=False,
+        demo=False):
+    """Render the world text. `demo` turns on the recording-only visuals
+    (DEMO_PALETTE racking, the closed pallet back) - keyword-only in effect,
+    since experiments/run_batch.py passes three positional arguments, so a
+    measured run cannot reach them by accident."""
+    global _DEMO
+    _DEMO = demo
     _SEEN.clear()
     if layout.get("label"):
         write_code_images(layout)
@@ -774,7 +914,7 @@ def wbt(layout, version, controller="shelfscan_audit"):
         # marker node used only for ground-truth lookup by the offline tools
         a(f'DEF SLOT_{n} Pose {{ translation {s["x"]} {s["y"]} {s["z"]} }}')
     x0, y0, yaw = layout["start_pose"]
-    a(robot_node(x0, y0, yaw, controller))
+    a(robot_node(x0, y0, yaw, controller, display))
     return "\n".join(L) + "\n"
 
 
@@ -788,22 +928,64 @@ def main():
                     help="put a machine-readable code on each carton label "
                          "instead of the printed SKU pattern (MVP)")
     ap.add_argument("--qr", action="store_true", help="shorthand for --label qr")
+    ap.add_argument("--name", default=None,
+                    help="write _run_<name>.wbt and _layout_<name>.json "
+                         "instead of warehouse.wbt and layout.json. Both are "
+                         "gitignored, so a recording world can sit in "
+                         "webots/worlds/ - where Webots can find the "
+                         "controller - without touching the tracked one.")
+    # Recording only, and deliberately NOT implied by --display: a HUD_DISPLAY
+    # debugging run on an eval seed should still render the world the detector
+    # was trained on. Same env-default-in-main() trick as --display below.
+    ap.add_argument("--demo", action="store_true",
+                    default=os.environ.get("DEMO_VISUALS") == "1",
+                    help="recording visuals: galvanised racking and a closed "
+                         "pallet back (DEMO_VISUALS=1). Off by default - they "
+                         "change what the detector sees, so measured runs "
+                         "must not use them. See DEMO_PALETTE.")
+    # Recording only. The env default is read HERE rather than in wbt(), so an
+    # exported HUD_DISPLAY=1 cannot reach the worlds experiments/run_batch.py
+    # builds for a measured run - it calls wbt() directly and never passes it.
+    ap.add_argument("--display", action="store_true",
+                    default=os.environ.get("HUD_DISPLAY") == "1",
+                    help="add the 'inset' Display device the controller paints "
+                         "the annotated camera frame onto (HUD_DISPLAY=1). Off "
+                         "by default; the world is unchanged without it.")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     lay = make(a.seed, label=a.label or ("qr" if a.qr else None))
-    (out / "layout.json").write_text(json.dumps(lay, indent=1))
-    (out / "warehouse.wbt").write_text(wbt(lay, a.version, a.controller))
+    # --name writes the same _run_<tag>.wbt / _layout_<tag>.json pair
+    # experiments/run_batch.py uses, so a second world can live in
+    # webots/worlds/ beside the tracked warehouse.wbt without overwriting it.
+    # It HAS to live there: Webots looks for controllers/ beside the folder
+    # holding the world, so a world in webots/worlds/<subdir>/ searches
+    # webots/worlds/controllers/, finds nothing, and silently starts the
+    # <generic> controller instead - a run that looks like a timeout.
+    if a.name:
+        world, lay_path = (out / f"_run_{a.name}.wbt",
+                           out / f"_layout_{a.name}.json")
+    else:
+        world, lay_path = out / "warehouse.wbt", out / "layout.json"
+    lay_path.write_text(json.dumps(lay, indent=1))
+    world.write_text(wbt(lay, a.version, a.controller, a.display, a.demo))
     cls, sku, blk = {}, {}, {}
     for s in lay["slots"].values():
         cls[s["size_class"]] = cls.get(s["size_class"], 0) + 1
         sku[s["actual"] or "(empty)"] = sku.get(s["actual"] or "(empty)", 0) + 1
         blk[s["blocker_kind"] or "(none)"] = blk.get(s["blocker_kind"] or "(none)", 0) + 1
-    print(f"wrote {out/'warehouse.wbt'} and {out/'layout.json'} (seed {a.seed}, "
+    print(f"wrote {world} and {lay_path} (seed {a.seed}, "
           f"{lay['n_slots']} slots = {SIDES} sides x {LEVELS} levels x {BAYS} bays)")
     print("  size classes: " + ", ".join(f"{k}={v}" for k, v in sorted(cls.items())))
     print("  true content: " + ", ".join(f"{k}={v}" for k, v in sorted(sku.items())))
     print("  blockers:     " + ", ".join(f"{k}={v}" for k, v in sorted(blk.items())))
+    print("  visuals:      " + ("DEMO - galvanised racking, closed pallet "
+                                 "back (NOT for measured runs)" if a.demo
+                                 else "eval - the racking v4 was trained on"))
+    if a.display:
+        proj = write_overlay_perspective(world, version=a.version)
+        print(f"  + 'inset' Display {CAM_W}x{CAM_H} (HUD_DISPLAY recording)")
+        print(f"  + overlay layout -> {proj} (inset at 0;0, raw camera overlay off)")
     print("  levels (deck top / camera z / lift): " + ", ".join(
         f"L{i}: {LEVEL_Z[i]} / {CAM_LEVEL_Z[i]} / {LIFT_POS[i]}" for i in range(LEVELS)))
 
