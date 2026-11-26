@@ -863,6 +863,12 @@ def main():
                     help="put a machine-readable code on each carton label "
                          "instead of the printed SKU pattern (MVP)")
     ap.add_argument("--qr", action="store_true", help="shorthand for --label qr")
+    ap.add_argument("--name", default=None,
+                    help="write _run_<name>.wbt and _layout_<name>.json "
+                         "instead of warehouse.wbt and layout.json. Both are "
+                         "gitignored, so a recording world can sit in "
+                         "webots/worlds/ - where Webots can find the "
+                         "controller - without touching the tracked one.")
     # Recording only. The env default is read HERE rather than in wbt(), so an
     # exported HUD_DISPLAY=1 cannot reach the worlds experiments/run_batch.py
     # builds for a measured run - it calls wbt() directly and never passes it.
@@ -875,22 +881,32 @@ def main():
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     lay = make(a.seed, label=a.label or ("qr" if a.qr else None))
-    (out / "layout.json").write_text(json.dumps(lay, indent=1))
-    (out / "warehouse.wbt").write_text(
-        wbt(lay, a.version, a.controller, a.display))
+    # --name writes the same _run_<tag>.wbt / _layout_<tag>.json pair
+    # experiments/run_batch.py uses, so a second world can live in
+    # webots/worlds/ beside the tracked warehouse.wbt without overwriting it.
+    # It HAS to live there: Webots looks for controllers/ beside the folder
+    # holding the world, so a world in webots/worlds/<subdir>/ searches
+    # webots/worlds/controllers/, finds nothing, and silently starts the
+    # <generic> controller instead - a run that looks like a timeout.
+    if a.name:
+        world, lay_path = (out / f"_run_{a.name}.wbt",
+                           out / f"_layout_{a.name}.json")
+    else:
+        world, lay_path = out / "warehouse.wbt", out / "layout.json"
+    lay_path.write_text(json.dumps(lay, indent=1))
+    world.write_text(wbt(lay, a.version, a.controller, a.display))
     cls, sku, blk = {}, {}, {}
     for s in lay["slots"].values():
         cls[s["size_class"]] = cls.get(s["size_class"], 0) + 1
         sku[s["actual"] or "(empty)"] = sku.get(s["actual"] or "(empty)", 0) + 1
         blk[s["blocker_kind"] or "(none)"] = blk.get(s["blocker_kind"] or "(none)", 0) + 1
-    print(f"wrote {out/'warehouse.wbt'} and {out/'layout.json'} (seed {a.seed}, "
+    print(f"wrote {world} and {lay_path} (seed {a.seed}, "
           f"{lay['n_slots']} slots = {SIDES} sides x {LEVELS} levels x {BAYS} bays)")
     print("  size classes: " + ", ".join(f"{k}={v}" for k, v in sorted(cls.items())))
     print("  true content: " + ", ".join(f"{k}={v}" for k, v in sorted(sku.items())))
     print("  blockers:     " + ", ".join(f"{k}={v}" for k, v in sorted(blk.items())))
     if a.display:
-        proj = write_overlay_perspective(out / "warehouse.wbt",
-                                         version=a.version)
+        proj = write_overlay_perspective(world, version=a.version)
         print(f"  + 'inset' Display {CAM_W}x{CAM_H} (HUD_DISPLAY recording)")
         print(f"  + overlay layout -> {proj} (inset on the right half)")
     print("  levels (deck top / camera z / lift): " + ", ".join(
